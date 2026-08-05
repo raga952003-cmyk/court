@@ -8,9 +8,12 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+_backend_dir = Path(__file__).resolve().parent
+load_dotenv(_backend_dir / ".env")
+load_dotenv(_backend_dir.parent / ".env")
 
 # Email Configuration from environment variables
 # Supports Gmail, Brevo (Sendinblue), Outlook, etc.

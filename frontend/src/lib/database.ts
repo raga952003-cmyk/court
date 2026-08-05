@@ -2383,6 +2383,4 @@ export const db = {
   },
 };
 
-};
-
 
