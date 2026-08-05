@@ -6,13 +6,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../lib/database';
 import { Notification } from '../types';
-import { Bell, Check, Trash, Info, CheckCircle, AlertTriangle, AlertOctagon } from 'lucide-react';
+import { Bell, Check, Info, CheckCircle, AlertTriangle, AlertOctagon } from 'lucide-react';
 
 interface NotificationBellProps {
   employeeId: string;
+  /** Use on dark nav bars (Admin/Security/IT/Employee headers). */
+  variant?: 'default' | 'onDark';
 }
 
-export default function NotificationBell({ employeeId }: NotificationBellProps) {
+export default function NotificationBell({ employeeId, variant = 'default' }: NotificationBellProps) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -30,7 +32,6 @@ export default function NotificationBell({ employeeId }: NotificationBellProps) 
   useEffect(() => {
     fetchNotifs();
 
-    // Re-fetch notifications when storage updates (e.g. simulated realtime sync)
     const handleStorageUpdate = () => {
       fetchNotifs();
     };
@@ -41,7 +42,6 @@ export default function NotificationBell({ employeeId }: NotificationBellProps) 
     };
   }, [employeeId]);
 
-  // Handle click outside to close
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -52,7 +52,17 @@ export default function NotificationBell({ employeeId }: NotificationBellProps) 
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isOpen]);
+
   const unreadCount = notifications.filter(n => !n.read).length;
+  const badgeLabel = unreadCount > 9 ? '9+' : String(unreadCount);
 
   const handleMarkRead = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -61,6 +71,16 @@ export default function NotificationBell({ employeeId }: NotificationBellProps) 
       fetchNotifs();
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
+    }
+  };
+
+  const handleMarkAllRead = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await db.markAllNotificationsRead(employeeId);
+      fetchNotifs();
+    } catch (error) {
+      console.error('Failed to mark all notifications as read:', error);
     }
   };
 
@@ -81,27 +101,53 @@ export default function NotificationBell({ employeeId }: NotificationBellProps) 
     <div className="relative" ref={dropdownRef}>
       <button
         id="notification_bell_btn"
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+        className={
+          variant === 'onDark'
+            ? 'relative p-2 text-blue-100 hover:text-white hover:bg-white/10 rounded-xl transition-all cursor-pointer'
+            : 'relative p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-all cursor-pointer'
+        }
         aria-label="Notifications"
+        aria-expanded={isOpen}
+        aria-haspopup="true"
       >
         <Bell className="w-5 h-5" />
         {unreadCount > 0 && (
-          <span id="notif_badge" className="absolute top-1.5 right-1.5 bg-rose-500 text-white font-semibold text-[10px] w-4 h-4 rounded-full flex items-center justify-center animate-bounce-subtle border border-white">
-            {unreadCount}
+          <span
+            id="notif_badge"
+            className="absolute top-1 right-1 bg-rose-500 text-white font-semibold text-[10px] min-w-4 h-4 px-1 rounded-full flex items-center justify-center border border-white"
+          >
+            {badgeLabel}
           </span>
         )}
       </button>
 
       {isOpen && (
-        <div id="notification_dropdown" className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 overflow-hidden">
-          <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+        <div
+          id="notification_dropdown"
+          role="region"
+          aria-label="Notifications panel"
+          className="absolute right-0 mt-2 w-[min(20rem,calc(100vw-1.5rem))] sm:w-80 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 overflow-hidden"
+        >
+          <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between gap-2">
             <h3 className="font-display font-bold text-sm text-slate-800">Campus Alerts</h3>
-            {unreadCount > 0 && (
-              <span className="text-[10px] bg-blue-100 text-blue-800 font-semibold px-2 py-0.5 rounded-full">
-                {unreadCount} new
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {unreadCount > 0 && (
+                <>
+                  <span className="text-[10px] bg-blue-100 text-blue-800 font-semibold px-2 py-0.5 rounded-full">
+                    {unreadCount} new
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleMarkAllRead}
+                    className="text-[10px] font-bold text-[#003366] hover:underline cursor-pointer"
+                  >
+                    Mark all read
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
@@ -118,7 +164,7 @@ export default function NotificationBell({ employeeId }: NotificationBellProps) 
                   }`}
                 >
                   {getIcon(n.type)}
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <p className={`font-semibold text-slate-800 ${!n.read ? 'text-blue-950 font-bold' : ''}`}>
                       {n.title}
                     </p>
@@ -129,9 +175,11 @@ export default function NotificationBell({ employeeId }: NotificationBellProps) 
                   </div>
                   {!n.read && (
                     <button
+                      type="button"
                       onClick={(e) => handleMarkRead(n.id, e)}
                       className="p-1 text-slate-400 hover:text-blue-600 rounded hover:bg-slate-100 cursor-pointer"
                       title="Mark read"
+                      aria-label="Mark notification as read"
                     >
                       <Check className="w-3.5 h-3.5" />
                     </button>

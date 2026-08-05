@@ -692,75 +692,37 @@ class DatabaseManager:
         if facility["status"] == "maintenance":
             return {"success": False, "error": f"{facility['sport']} {facility['courtName']} is under maintenance and cannot be booked."}
 
-        # 2. Validate primary employee
+        # 2. Validate primary employee (must already be registered — no auto-register)
         employee = self.get_user_by_employee_id(emp_id)
         if not employee:
-            if email:
-                # Auto register
-                reg_res = self.register_user({
-                    "employeeId": emp_id,
-                    "name": f"Employee {emp_id}",
-                    "email": email,
-                    "phoneNumber": "",
-                    "department": "BFSI",
-                    "businessUnit": "BU_TCS_CHN",
-                    "role": "employee"
-                })
-                if reg_res["success"]:
-                    employee = reg_res["user"]
-                else:
-                    return {"success": False, "error": reg_res.get("error", "Failed to register user.")}
-            else:
-                return {"success": False, "error": f"Employee ID {emp_id} not found."}
+            return {"success": False, "error": f"Employee ID {emp_id} is not registered. Register before booking."}
         elif email and employee["email"].lower() != email:
             return {"success": False, "error": f"The provided Email ID does not match the registered Email for Employee ID {emp_id}."}
 
-        # 3. Validate additional players for Badminton
+        # 3. Optional invitees — registered users only (aligned with frontend invite flow)
         all_players = [employee]
         additional_players_list = []
-        
-        if facility["sport"] == "Badminton":
-            additional = booking_data.get("additionalPlayers") or []
-            if len(additional) != 3:
-                return {"success": False, "error": "Badminton bookings require exactly 4 players. Please provide details for the other 3 players."}
-                
-            # Check unique employee IDs
-            all_emp_ids = [emp_id] + [p["employeeId"].strip().upper() for p in additional]
-            if len(set(all_emp_ids)) < 4:
-                return {"success": False, "error": "All 4 players must have unique Employee IDs."}
-                
-            for idx, p in enumerate(additional):
-                p_emp_id = p["employeeId"].strip().upper()
-                p_name = p["name"].strip()
-                p_email = p["email"].strip().lower()
-                
-                if not p_emp_id or not p_name or not p_email:
-                    return {"success": False, "error": f"Player {idx + 2} details (Employee ID, Name, and Email) are required."}
-                    
-                p_user = self.get_user_by_employee_id(p_emp_id)
-                if not p_user:
-                    reg_res = self.register_user({
-                        "employeeId": p_emp_id,
-                        "name": p_name,
-                        "email": p_email,
-                        "phoneNumber": "",
-                        "department": "BFSI",
-                        "businessUnit": "BU_TCS_CHN",
-                        "role": "employee"
-                    })
-                    if reg_res["success"]:
-                        p_user = reg_res["user"]
-                    else:
-                        return {"success": False, "error": f"Failed to register Player {idx + 2} ({p_emp_id}): {reg_res.get('error')}"}
-                elif p_user["email"].lower() != p_email:
-                    return {"success": False, "error": f"The provided Email for Player {idx + 2} ({p_emp_id}) does not match their registered Email ({p_user['email']})."}
-                
-                all_players.append(p_user)
-                additional_players_list.append({
-                    "employeeId": p_user["employeeId"],
-                    "name": p_user["name"],
-                    "email": p_user["email"]
-                })
+        additional = booking_data.get("additionalPlayers") or []
+        seen_ids = {emp_id}
+        for idx, p in enumerate(additional):
+            p_emp_id = (p.get("employeeId") or "").strip().upper()
+            p_name = (p.get("name") or "").strip()
+            if not p_emp_id:
+                continue
+            if p_emp_id in seen_ids:
+                return {"success": False, "error": f"Duplicate invite for Employee ID {p_emp_id}."}
+            seen_ids.add(p_emp_id)
+            p_user = self.get_user_by_employee_id(p_emp_id)
+            if not p_user:
+                return {"success": False, "error": f"Employee ID {p_emp_id} is not registered. They must register before they can be invited."}
+            if p_name and p_name.lower() != p_user["name"].strip().lower():
+                return {"success": False, "error": f"Name for {p_emp_id} does not match registered name ({p_user['name']})."}
+            all_players.append(p_user)
+            additional_players_list.append({
+                "employeeId": p_user["employeeId"],
+                "name": p_user["name"],
+                "email": p_user["email"]
+            })
 
         # 4. Check booking rules & window bypass for Admins
         sim_time = self.get_simulated_time()
@@ -784,8 +746,16 @@ class DatabaseManager:
         max_capacity = capacities.get(sport_name, 4)
         
         joined_count = len([b for b in bookings if b["facilityId"] == facility_id and b["slotTime"] == slot_time and b["status"] != "cancelled"])
-        if joined_count >= max_capacity:
-            return {"success": False, "error": f"This slot is already fully booked ({joined_count}/{max_capacity} players)."}
+        pending_invites = 0
+        if USE_SUPABASE:
+            try:
+                inv_res = supabase_client.table("booking_invites").select("invite_id").eq("facility_id", facility_id).eq("slot_time", slot_time).eq("status", "pending").execute()
+                pending_invites = len(inv_res.data or [])
+            except Exception:
+                pending_invites = 0
+        seats_needed = 1 + len(additional_players_list)
+        if joined_count + pending_invites + seats_needed > max_capacity:
+            return {"success": False, "error": f"Not enough seats. Capacity {max_capacity}, occupied/reserved {joined_count + pending_invites}, requested {seats_needed}."}
 
         # Overlapping and daily limit check helper
         def player_in_booking(b, check_emp_id):
@@ -852,49 +822,64 @@ class DatabaseManager:
             finally:
                 db.close()
 
-        # 7. Add local notifications for all players
-        for p_user in all_players:
-            p_emp = p_user["employeeId"]
-            p_name = p_user["name"]
-            msg = f"Your slot for {facility['sport']} ({facility['courtName']}) at {slot_time} has been successfully booked!"
-            if facility["sport"] == "Badminton" and p_emp != emp_id:
-                msg = f"You have been added to a Badminton booking by {employee['name']} for {facility['courtName']} at {slot_time}."
-            
-            self.add_notification({
-                "employeeId": p_emp,
-                "title": "Booking Confirmed 🎉",
-                "message": msg,
-                "type": "success"
-            })
+        # 7. Notify organizer (confirmed) + create 5-min invites for additional registered players
+        self.add_notification({
+            "employeeId": emp_id,
+            "title": "Booking Confirmed",
+            "message": f"Your slot for {facility['sport']} ({facility['courtName']}) at {slot_time} has been successfully booked!",
+            "type": "success"
+        })
+        self.send_simulated_email(
+            employee["email"],
+            f"TCS PlaySmart - Slot Booking Confirmed [{booking_id}]",
+            f"Dear {employee['name']},\n\nYour booking is confirmed.\n\n"
+            f"- Booking ID: {booking_id}\n- Sport: {facility['sport']}\n"
+            f"- Court: {facility['courtName']}\n- Slot: {slot_time}\n\n"
+            f"Best Regards,\nTCS PlaySmart Admin Team"
+        )
 
-        # 8. Simulated SMTP dispatcher outbox email trigger for all players
-        now = datetime.datetime.now()
-        for p_user in all_players:
-            p_emp = p_user["employeeId"]
-            p_name = p_user["name"]
-            p_email = p_user["email"]
-            
-            email_subject = f"TCS PlaySmart - Slot Booking Confirmed [{booking_id}] 🏸"
-            
-            # Custom message body depending on who booked it
-            if facility["sport"] == "Badminton" and p_emp != emp_id:
-                salutation = f"Dear {p_name},\n\nGood news! {employee['name']} has successfully booked a Badminton slot and included you as a player!\n\n"
-            else:
-                salutation = f"Dear {p_name},\n\nYour sports booking request on PlaySmart has been successfully confirmed!\n\n"
-                
-            email_body = salutation + f"Booking Details:\n- Booking ID: {booking_id}\n- Sport Category: {facility['sport']}\n- Court / Board: {facility['courtName']}\n- Reserved Time Slot: {slot_time}\n- Booking Channel: {source.capitalize()} Booking\n- Booking Time: {now.strftime('%I:%M %p')}\n"
-            
-            if facility["sport"] == "Badminton":
-                players_list_str = "\n".join([f"  - Player {i+1}: {pl['name']} ({pl['employeeId']})" for i, pl in enumerate(all_players)])
-                email_body += f"\nPlayers in this Match:\n{players_list_str}\n"
-                
-            email_body += f"\nPlease present your simulated QR Gate Pass at the court check-in checkpoint.\n\nEnjoy your active session!\n\nBest Regards,\nTCS PlaySmart Admin Team"
-            
-            self.send_simulated_email(p_email, email_subject, email_body)
+        expires_at = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)).isoformat()
+        invites_sent = 0
+        if USE_SUPABASE and additional_players_list:
+            for i, p_user in enumerate(additional_players_list):
+                invite_id = f"inv_{int(datetime.datetime.now().timestamp() * 1000)}_{i}"
+                try:
+                    supabase_client.table("booking_invites").insert({
+                        "invite_id": invite_id,
+                        "booking_id": booking_id,
+                        "organizer_employee_id": emp_id,
+                        "invitee_employee_id": p_user["employeeId"],
+                        "invitee_name": p_user["name"],
+                        "facility_id": facility_id,
+                        "sport": facility["sport"],
+                        "court_name": facility["courtName"],
+                        "slot_time": slot_time,
+                        "status": "pending",
+                        "expires_at": expires_at
+                    }).execute()
+                except Exception as e:
+                    return {"success": False, "error": f"Booking created but invite failed: {e}"}
 
-        # Convert back camelCase for response
+                invite_msg = (
+                    f"{employee['name']} ({emp_id}) invited you to {facility['sport']} "
+                    f"({facility['courtName']}) at {slot_time}. Accept within 5 minutes or it expires."
+                )
+                self.add_notification({
+                    "employeeId": p_user["employeeId"],
+                    "title": "Match Invite — Accept within 5 minutes",
+                    "message": invite_msg,
+                    "type": "warning"
+                })
+                self.send_simulated_email(
+                    p_user["email"],
+                    f"TCS PlaySmart - Match Invite [{facility['sport']} {slot_time}]",
+                    f"Dear {p_user['name']},\n\n{invite_msg}\n\nBest Regards,\nTCS PlaySmart Admin Team"
+                )
+                invites_sent += 1
+
         return {
             "success": True,
+            "invitesSent": invites_sent,
             "booking": {
                 "bookingId": booking_id,
                 "employeeId": emp_id,

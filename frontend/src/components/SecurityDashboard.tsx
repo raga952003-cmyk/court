@@ -7,16 +7,31 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../lib/database';
 import { User, Booking, Facility, SlotTime, SportType } from '../types';
 import { SLOT_TIMES } from '../data/initialData';
+import { normalizeLocation, sameLocation } from '../data/tcsLocations';
 import { Shield, Search, QrCode, UserCheck, XOctagon, Calendar, CheckSquare, RefreshCw, AlertTriangle, Play, HelpCircle, Camera, Check, CheckCircle2, AlertCircle, ArrowLeft, X, Printer, Sparkles, Download } from 'lucide-react';
 import NotificationBell from './NotificationBell';
 import QRCodeSVG from './QRCodeSVG';
 import AIChatAssistant from './AIChatAssistant';
-const THEMES = {
+import Modal from './ui/Modal';
+import { showAppToast } from './ui/AppToast';
+import TicketInbox from './TicketInbox';
+import {
+  firstFutureSlot,
+  formatCampusTime,
+  getWallClockIST,
+  isDemoSimulatedTimeEnabled,
+  isSecurityDeskBookingOpen,
+  isSlotPastOrStarted
+} from '../lib/timeWindows';
+
+type PortalTheme = 'blue' | 'dark';
+const THEMES: Record<PortalTheme, { navBg: string; primaryBtn: string; text: string }> = {
   blue: { navBg: 'bg-[#003366]', primaryBtn: 'bg-[#003366] hover:bg-blue-900', text: 'text-[#003366]' },
-  dark: { navBg: 'bg-[#0f172a]', primaryBtn: 'bg-[#0f172a] hover:bg-slate-900', text: 'text-[#0f172a]' },
-  green: { navBg: 'bg-[#064e3b]', primaryBtn: 'bg-[#064e3b] hover:bg-emerald-900', text: 'text-[#064e3b]' },
-  purple: { navBg: 'bg-[#3b0764]', primaryBtn: 'bg-[#3b0764] hover:bg-fuchsia-900', text: 'text-[#3b0764]' }
+  dark: { navBg: 'bg-[#0f172a]', primaryBtn: 'bg-[#0f172a] hover:bg-slate-900', text: 'text-[#0f172a]' }
 };
+function readPortalTheme(): PortalTheme {
+  return localStorage.getItem('playsmart_theme') === 'dark' ? 'dark' : 'blue';
+}
 
 interface SecurityDashboardProps {
   user: User;
@@ -33,17 +48,14 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
   // Assisted booking state
   const [bookingEmployeeId, setBookingEmployeeId] = useState('');
   const [bookingEmail, setBookingEmail] = useState('');
-  const [p2EmpId, setP2EmpId] = useState('');
-  const [p2Name, setP2Name] = useState('');
-  const [p2Email, setP2Email] = useState('');
-  const [p3EmpId, setP3EmpId] = useState('');
-  const [p3Name, setP3Name] = useState('');
-  const [p3Email, setP3Email] = useState('');
-  const [p4EmpId, setP4EmpId] = useState('');
-  const [p4Name, setP4Name] = useState('');
-  const [p4Email, setP4Email] = useState('');
+  const [inviteRows, setInviteRows] = useState<Array<{ employeeId: string; name: string }>>([
+    { employeeId: '', name: '' }
+  ]);
   const [bookingSport, setBookingSport] = useState<SportType>('Badminton');
   const [selectedAvailableSport, setSelectedAvailableSport] = useState<SportType>('Badminton');
+  const [locationSports, setLocationSports] = useState<SportType[]>([
+    'Badminton', 'Basketball', 'Volleyball', 'Table Tennis', 'Carrom', 'Box Cricket'
+  ]);
   const [bookingFacilityId, setBookingFacilityId] = useState('');
   const [bookingSlot, setBookingSlot] = useState<SlotTime>('6-7 AM');
   const [bookingError, setBookingError] = useState('');
@@ -71,7 +83,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
   const [isScanning, setIsScanning] = useState(false);
   const [scannedBooking, setScannedBooking] = useState<Booking | null>(null);
   const [generatedQrBooking, setGeneratedQrBooking] = useState<Booking | null>(null);
-  const [simTime, setSimTime] = useState({ hour: 9, minute: 0 });
+  const [simTime, setSimTime] = useState(() => getWallClockIST());
   const [scannerSearchQuery, setScannerSearchQuery] = useState('');
 
   // Profile settings modal states
@@ -90,37 +102,70 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
   const [profileSuccess, setProfileSuccess] = useState('');
 
   // Theme state
-  const [theme, setTheme] = useState<'blue' | 'dark' | 'green' | 'purple'>((localStorage.getItem('playsmart_theme') as any) || 'blue');
+  const [theme, setTheme] = useState<PortalTheme>(readPortalTheme);
 
   // Active filter for bookings list
   const [statusFilter, setStatusFilter] = useState<'all' | 'confirmed' | 'checked_in' | 'no_show'>('all');
 
   const refreshData = async () => {
     try {
-      const [usersList, booksList, facsList, timeConf, slots, capacities] = await Promise.all([
+      const userLocation = normalizeLocation(user.businessUnit) || 'Chennai, India';
+      const [usersList, booksList, facsList, slots, capacities, sports] = await Promise.all([
         db.getUsers(),
         db.getBookings(),
-        db.getFacilities(),
-        db.getSimulatedTime(),
-        db.getSlotTimes(),
-        db.getSportCapacities()
+        db.getFacilities(userLocation),
+        db.getSlotTimes(userLocation),
+        db.getSportCapacities(userLocation),
+        db.getLocationSports(userLocation)
       ]);
-      setEmployees(usersList.filter(u => u.role === 'employee'));
-      setBookings(booksList);
+      // Same-location employees and bookings only
+      const facilityIds = new Set(facsList.map(f => f.facilityId));
+      setEmployees(
+        usersList.filter(u => u.role === 'employee' && sameLocation(u.businessUnit, userLocation))
+      );
+      setBookings(booksList.filter(b => facilityIds.has(b.facilityId)));
       setFacilities(facsList);
-      setSimTime(timeConf);
       setSlotTimes(slots);
       setSportCapacities(capacities);
+      setLocationSports(sports);
+      if (sports.length > 0) {
+        if (!sports.includes(bookingSport)) setBookingSport(sports[0]);
+        if (!sports.includes(selectedAvailableSport)) setSelectedAvailableSport(sports[0]);
+      }
+      if (isDemoSimulatedTimeEnabled()) {
+        setSimTime(await db.getSimulatedTime());
+      } else {
+        setSimTime(getWallClockIST());
+      }
     } catch (e) {
       console.error('Error refreshing gatekeeper data:', e);
+      if (!isDemoSimulatedTimeEnabled()) setSimTime(getWallClockIST());
     }
   };
 
+  // Live campus clock for booking freeze (independent of API refresh)
   useEffect(() => {
-    if (slotTimes.length > 0 && !slotTimes.includes(bookingSlot)) {
-      setBookingSlot(slotTimes[0]);
+    const tick = () => {
+      if (isDemoSimulatedTimeEnabled()) {
+        db.getSimulatedTime().then(setSimTime).catch(() => setSimTime(getWallClockIST()));
+      } else {
+        setSimTime(getWallClockIST());
+      }
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (slotTimes.length === 0) return;
+    // Prefer first future slot; never leave a past slot selected for new bookings
+    if (!slotTimes.includes(bookingSlot) || isSlotPastOrStarted(bookingSlot, simTime)) {
+      const next = firstFutureSlot(slotTimes, simTime);
+      if (next) setBookingSlot(next as SlotTime);
+      else if (slotTimes[0]) setBookingSlot(slotTimes[0]);
     }
-  }, [slotTimes]);
+  }, [slotTimes, simTime, bookingSlot]);
 
   useEffect(() => {
     refreshData();
@@ -130,27 +175,30 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
       setTheme(storedTheme as any);
     };
     const handleTimeChange = async () => {
-      const time = await db.getSimulatedTime();
-      setSimTime(time);
       refreshData();
     };
     const handleSlotsChange = () => refreshData();
     const handleCapacitiesChange = () => refreshData();
+    const handleFacilitiesChange = () => refreshData();
 
     window.addEventListener('storage', handleStorageUpdate);
     window.addEventListener('simulated_time_change', handleTimeChange);
     window.addEventListener('slot_times_change', handleSlotsChange);
     window.addEventListener('sport_capacities_change', handleCapacitiesChange);
+    window.addEventListener('facilities_change', handleFacilitiesChange);
+    window.addEventListener('location_sports_change', handleFacilitiesChange);
 
     const interval = setInterval(() => {
       refreshData();
-    }, 3000);
+    }, 2500);
 
     return () => {
       window.removeEventListener('storage', handleStorageUpdate);
       window.removeEventListener('simulated_time_change', handleTimeChange);
       window.removeEventListener('slot_times_change', handleSlotsChange);
       window.removeEventListener('sport_capacities_change', handleCapacitiesChange);
+      window.removeEventListener('facilities_change', handleFacilitiesChange);
+      window.removeEventListener('location_sports_change', handleFacilitiesChange);
       clearInterval(interval);
     };
   }, []);
@@ -164,6 +212,28 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
       setBookingFacilityId('');
     }
   }, [bookingSport, facilities]);
+
+  // Escape closes overlays (scanner / ticket / settings)
+  useEffect(() => {
+    if (!isScanning && !generatedQrBooking && !isSettingsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (isScanning) {
+        setIsScanning(false);
+        setScannedBooking(null);
+      } else if (generatedQrBooking) {
+        setGeneratedQrBooking(null);
+      } else if (isSettingsOpen) {
+        setIsSettingsOpen(false);
+        setProfileError('');
+        setProfileSuccess('');
+        setPasswordError('');
+        setPasswordSuccess('');
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isScanning, generatedQrBooking, isSettingsOpen]);
 
   // Handle Search for Employees list
   const filteredEmployees = employees.filter(emp => 
@@ -198,22 +268,45 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
       return;
     }
 
+    if (!isSecurityDeskBookingOpen(simTime)) {
+      setBookingError('Security desk booking is frozen outside 5:00 AM – 10:00 AM.');
+      return;
+    }
+
+    if (isSlotPastOrStarted(bookingSlot, simTime)) {
+      setBookingError(`Slot ${bookingSlot} has already started or ended. Choose a later slot.`);
+      return;
+    }
+
+    const additionalPlayers = inviteRows
+      .map(r => ({ employeeId: r.employeeId.trim().toUpperCase(), name: r.name.trim() }))
+      .filter(r => r.employeeId);
+
+    for (const p of additionalPlayers) {
+      if (!p.name) {
+        setBookingError(`Enter the registered name for Employee ID ${p.employeeId}.`);
+        return;
+      }
+    }
+
     const result = await db.createBooking({
       employeeId: bookingEmployeeId.trim().toUpperCase(),
       email: bookingEmail.trim().toLowerCase(),
       facilityId: bookingFacilityId,
       slotTime: bookingSlot,
-      bookingSource: 'security', // Crucial: source is security desk
+      bookingSource: 'security',
+      additionalPlayers
     });
 
     if (result.success) {
-      const msg = `Successfully booked slot for Employee ${bookingEmployeeId.toUpperCase()}! A confirmation email has been triggered to ${bookingEmail.trim().toLowerCase()}.`;
+      const inviteNote = result.invitesSent
+        ? ` ${result.invitesSent} invite(s) sent — invitees have 5 minutes to Accept.`
+        : '';
+      const msg = `Successfully booked slot for Employee ${bookingEmployeeId.toUpperCase()}!${inviteNote}`;
       setBookingSuccessMessage(msg);
       setBookingEmployeeId('');
       setBookingEmail('');
-      setP2EmpId(''); setP2Name(''); setP2Email('');
-      setP3EmpId(''); setP3Name(''); setP3Email('');
-      setP4EmpId(''); setP4Name(''); setP4Email('');
+      setInviteRows([{ employeeId: '', name: '' }]);
       refreshData();
     } else {
       setBookingError(result.error || 'Failed to complete booking.');
@@ -338,7 +431,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
     }
   };
 
-  const handleThemeChange = (newTheme: 'blue' | 'dark' | 'green' | 'purple') => {
+  const handleThemeChange = (newTheme: PortalTheme) => {
     setTheme(newTheme);
     localStorage.setItem('playsmart_theme', newTheme);
     window.dispatchEvent(new Event('storage'));
@@ -369,7 +462,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
     if (res.success) {
       refreshData();
     } else {
-      alert(res.error);
+      showAppToast(res.error || 'Status update failed.', 'error');
     }
   };
 
@@ -378,9 +471,12 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
     if (res.success) {
       refreshData();
     } else {
-      alert(res.error);
+      showAppToast(res.error || 'Cancel failed.', 'error');
     }
   };
+
+  const isSecurityBookingWindow = isSecurityDeskBookingOpen(simTime);
+  const isFacilitiesOpen = simTime.hour >= 5 && simTime.hour < 20;
 
   const selectEmployee = (empId: string) => {
     setBookingEmployeeId(empId);
@@ -392,36 +488,44 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
   };
 
   return (
-    <div id="security_dashboard" className="min-h-screen bg-[#F8FAFC] text-slate-800 flex flex-col justify-between">
+    <div id="security_dashboard" className="min-h-screen tcs-campus-bg text-slate-800 flex flex-col justify-between">
       <div className="grow">
         {/* Top Header Navigation */}
         <nav className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white py-3.5 px-4 sm:px-6 lg:px-8 shadow-sm transition-all duration-300`}>
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-white/10 rounded flex items-center justify-center font-bold italic text-white shadow-sm border border-white/15">P</div>
+              <img src="/tcs_logo.png" className="h-8 w-auto object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS" />
               <div>
                 <span className="font-display font-extrabold text-lg text-white block leading-tight">
-                  PlaySmart Gatekeeper
+                  TCS Play-Smart
                 </span>
                 <span className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider block">
-                  Physical Security Desk
+                  Security · {user.businessUnit || 'Campus'}
                 </span>
               </div>
             </div>
 
             <div className="flex items-center gap-4">
               <div className="hidden md:flex items-center gap-2">
-                <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
-                <span className="text-xs text-blue-100 font-medium">Security Gate Scanner Online</span>
+                <span className={`w-2 h-2 rounded-full ${isFacilitiesOpen ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'}`} />
+                <span className="text-xs text-blue-100 font-medium">
+                  {isFacilitiesOpen
+                    ? (isSecurityBookingWindow ? 'Desk booking open · Scanner online' : 'Desk booking frozen · Scanner online')
+                    : 'Facilities closed'}
+                </span>
               </div>
+
+              <NotificationBell employeeId={user.employeeId} variant="onDark" />
               
-              <div
+              <button
+                type="button"
                 onClick={() => setIsSettingsOpen(true)}
-                className="hidden sm:flex items-center gap-2 text-right cursor-pointer hover:opacity-85 transition-opacity"
+                className="hidden sm:flex items-center gap-2 text-right cursor-pointer hover:opacity-85 transition-opacity bg-transparent border-0 p-0"
                 title="View Profile & Settings"
+                aria-label="Open profile and settings"
               >
                 {user.avatar ? (
-                  <img src={user.avatar} className="w-7 h-7 rounded-full object-cover border border-white/25 shadow-sm" alt="Avatar" />
+                  <img src={user.avatar} className="w-7 h-7 rounded-full object-cover border border-white/25 shadow-sm" alt="" />
                 ) : (
                   <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center font-bold text-xs text-white border border-white/25 shadow-sm">
                     {user.name.charAt(0).toUpperCase()}
@@ -431,7 +535,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                   <span className="text-xs font-semibold block text-slate-100 text-left">{user.name}</span>
                   <span className="text-[10px] text-blue-200/80 font-mono block text-left">Officer ID: {user.employeeId}</span>
                 </div>
-              </div>
+              </button>
 
               <button
                 id="sec_logout_btn"
@@ -473,7 +577,8 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
             <div>
               <p className="font-bold text-xs uppercase tracking-wider">Campus Facilities Closed</p>
               <p className="text-xs text-rose-700 mt-0.5 leading-relaxed">
-                TCS Chennai Campus sports facilities are closed (8:00 PM to 5:00 AM). Bookings are locked.
+                {user.businessUnit || 'TCS Campus'} sports facilities are closed (8:00 PM to 5:00 AM).
+                Bookings are locked. TCS Chennai Campus reference hours: same overnight window.
               </p>
             </div>
           </div>
@@ -493,9 +598,17 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                   </div>
                   <h3 className="font-display font-bold text-slate-900 text-base">QR PlayPass Gate Scanner</h3>
                 </div>
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse"></span> Visor Active
-                </span>
+                {isFacilitiesOpen ? (
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse" aria-hidden />
+                    Scanner online
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400 mr-1" aria-hidden />
+                    Facilities closed
+                  </span>
+                )}
               </div>
 
               <p className="text-xs text-slate-500 mb-5 leading-relaxed">
@@ -565,7 +678,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
 
             {/* 2. Assisted Booking Creation Form or Available Slots Explorer (Section 14) */}
             <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm">
-              {false ? ( // Security desk has 24/7 booking capability
+              {!isSecurityBookingWindow ? (
                 /* Frozen View: ONLY SEE AVAILABLE SLOTS */
                 <div className="space-y-4">
                   <div className="flex items-center gap-2 mb-2">
@@ -594,7 +707,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                       onChange={(e) => setSelectedAvailableSport(e.target.value as SportType)}
                       className="block w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 mb-4 cursor-pointer"
                     >
-                      {(['Badminton', 'Basketball', 'Volleyball', 'Table Tennis', 'Carrom', 'Box Cricket'] as SportType[]).map(s => (
+                      {locationSports.map(s => (
                         <option key={s} value={s}>{s}</option>
                       ))}
                     </select>
@@ -604,6 +717,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                         .filter(f => f.sport === selectedAvailableSport && f.status === 'active')
                         .map(fac => {
                           const openSlots = slotTimes.filter(st => {
+                            if (isSlotPastOrStarted(st, simTime)) return false;
                             return !bookings.some(b => b.facilityId === fac.facilityId && b.slotTime === st && b.status !== 'cancelled');
                           });
 
@@ -709,7 +823,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                           onChange={(e) => setBookingSport(e.target.value as SportType)}
                           className="mt-1 block w-full px-2 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
                         >
-                          {(['Badminton', 'Basketball', 'Volleyball', 'Table Tennis', 'Carrom', 'Box Cricket'] as SportType[]).map(s => (
+                          {locationSports.map(s => (
                             <option key={s} value={s}>{s}</option>
                           ))}
                         </select>
@@ -745,9 +859,77 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                         className="mt-1 block w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 font-mono"
                       >
                         {slotTimes.map(st => (
-                          <option key={st} value={st}>{st}</option>
+                          <option key={st} value={st} disabled={isSlotPastOrStarted(st, simTime)}>
+                            {st}{isSlotPastOrStarted(st, simTime) ? ' (past)' : ''}
+                          </option>
                         ))}
                       </select>
+                      <p className="mt-1 text-[10px] font-mono text-slate-500">
+                        Campus clock: {formatCampusTime(simTime)}
+                      </p>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl p-3 space-y-2 bg-slate-50/80">
+                      <p className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                        Invite additional registered players (optional)
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Unregistered Employee IDs cannot be invited. Invitees have 5 minutes to Accept.
+                      </p>
+                      {inviteRows.map((row, idx) => (
+                        <div key={idx} className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label htmlFor={`sec_invite_emp_${idx}`} className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                              Employee ID
+                            </label>
+                            <input
+                              id={`sec_invite_emp_${idx}`}
+                              value={row.employeeId}
+                              onChange={(e) => {
+                                const next = [...inviteRows];
+                                next[idx] = { ...next[idx], employeeId: e.target.value };
+                                setInviteRows(next);
+                              }}
+                              placeholder="e.g. EMP123"
+                              className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl font-mono bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label htmlFor={`sec_invite_name_${idx}`} className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                              Registered name
+                            </label>
+                            <input
+                              id={`sec_invite_name_${idx}`}
+                              value={row.name}
+                              onChange={(e) => {
+                                const next = [...inviteRows];
+                                next[idx] = { ...next[idx], name: e.target.value };
+                                setInviteRows(next);
+                              }}
+                              placeholder="Exact registered name"
+                              className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl bg-white"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                      <div className="flex gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setInviteRows([...inviteRows, { employeeId: '', name: '' }])}
+                          className="text-[11px] font-bold text-blue-700 hover:underline cursor-pointer"
+                        >
+                          + Add player
+                        </button>
+                        {inviteRows.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setInviteRows(inviteRows.slice(0, -1))}
+                            className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer"
+                          >
+                            Remove last
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <button
@@ -950,6 +1132,14 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
 
           </div>
         </div>
+
+        <div className="mt-8 bg-white rounded-3xl p-6 border border-slate-200 shadow-sm">
+          <TicketInbox
+            user={user}
+            queue="security"
+            title="Court concern tickets (Security queue)"
+          />
+        </div>
       </main>
     </div>
 
@@ -964,13 +1154,25 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
       </div>
       <div className="flex gap-2 items-center">
         <span className="w-2 h-2 bg-[#003366] rounded-full animate-pulse"></span>
-        <span>PlaySmart Security v1.0.4-Stable</span>
+        <span>TCS Play-Smart Security</span>
       </div>
     </footer>
 
     {/* 5. QR Scanner Viewport Modal (Scan State) */}
     {isScanning && (
-      <div id="security_scanner_modal" className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fade-in">
+      <div
+        id="security_scanner_modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="QR scanner"
+        className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fade-in"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) {
+            setIsScanning(false);
+            setScannedBooking(null);
+          }
+        }}
+      >
         <div className="bg-slate-900 text-white rounded-3xl max-w-2xl w-full border border-slate-800 shadow-2xl overflow-hidden flex flex-col md:flex-row h-[550px] md:h-[500px]">
           
           {/* Left side: Viewport Camera Simulation */}
@@ -1235,19 +1437,13 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
 
     {/* 6. QR Ticket Pass Generator Modal (QR Generation Utility) */}
     {generatedQrBooking && (
-      <div id="security_qr_ticket_modal" className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-        <div className="bg-white rounded-3xl max-w-sm w-full border border-slate-200 overflow-hidden shadow-2xl animate-scale-in text-center text-slate-800">
-          <div className="p-6">
-            <div className="flex justify-between items-center mb-4">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">TCS PLAYPASS GENERATOR</span>
-              <button
-                onClick={() => setGeneratedQrBooking(null)}
-                className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer font-sans"
-              >
-                ✕
-              </button>
-            </div>
-
+      <Modal
+        isOpen
+        onClose={() => setGeneratedQrBooking(null)}
+        title="TCS PlayPass Generator"
+        maxWidthClass="max-w-sm"
+      >
+          <div className="text-center text-slate-800">
             <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 border border-blue-100 rounded-full text-[10px] font-bold text-[#003366] uppercase tracking-wider mb-2">
               <Sparkles className="w-3 h-3 text-blue-600 animate-pulse" /> Walk-In Pass Generated
             </div>
@@ -1282,7 +1478,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
             <div className="flex gap-2">
               <button
                 onClick={() => {
-                  alert('Playpass ticket sent to printing queue.');
+                  showAppToast('Playpass ticket sent to printing queue.', 'success');
                 }}
                 className="flex-1 py-2.5 border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1.5"
               >
@@ -1296,14 +1492,28 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
               </button>
             </div>
           </div>
-        </div>
-      </div>
+      </Modal>
     )}
 
     {/* Profile & Settings Modal Dialog */}
     {isSettingsOpen && (
-      <div id="security_settings_modal" className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in text-slate-800">
-        <div className="bg-white rounded-3xl max-w-4xl w-full border border-slate-200 shadow-2xl overflow-hidden animate-scale-in flex flex-col md:flex-row">
+      <div
+        id="security_settings_modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Profile and settings"
+        className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in text-slate-800"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) {
+            setIsSettingsOpen(false);
+            setProfileError('');
+            setProfileSuccess('');
+            setPasswordError('');
+            setPasswordSuccess('');
+          }
+        }}
+      >
+        <div className="bg-white rounded-3xl max-w-4xl w-full border border-slate-200 shadow-2xl overflow-hidden animate-scale-in flex flex-col md:flex-row max-h-[90vh] overflow-y-auto">
           
           {/* Left Panel: Profile Details */}
           <div className="flex-1 p-8 border-b md:border-b-0 md:border-r border-slate-200">
@@ -1525,28 +1735,6 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                   >
                     <div className="w-4 h-4 rounded-full bg-[#0f172a] border border-white/20 shadow-sm"></div>
                     <span className="text-[9px]">Midnight</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleThemeChange('green')}
-                    className={`p-2 rounded-xl border text-center flex flex-col items-center gap-1 cursor-pointer transition-all ${
-                      theme === 'green' ? 'border-[#064e3b] bg-emerald-50 text-[#064e3b] font-bold' : 'border-slate-200 bg-white text-slate-600'
-                    }`}
-                  >
-                    <div className="w-4 h-4 rounded-full bg-[#064e3b] border border-white/20 shadow-sm"></div>
-                    <span className="text-[9px]">Emerald</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleThemeChange('purple')}
-                    className={`p-2 rounded-xl border text-center flex flex-col items-center gap-1 cursor-pointer transition-all ${
-                      theme === 'purple' ? 'border-[#3b0764] bg-fuchsia-50 text-[#3b0764] font-bold' : 'border-slate-200 bg-white text-slate-600'
-                    }`}
-                  >
-                    <div className="w-4 h-4 rounded-full bg-[#3b0764] border border-white/20 shadow-sm"></div>
-                    <span className="text-[9px]">Purple</span>
                   </button>
                 </div>
               </div>

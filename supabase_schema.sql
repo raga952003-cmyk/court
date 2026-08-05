@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     phone_number TEXT,
     department TEXT NOT NULL,
     business_unit TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('employee', 'security', 'admin')),
+    role TEXT NOT NULL CHECK (role IN ('employee', 'security', 'admin', 'it')),
     password TEXT DEFAULT 'password',
     avatar TEXT,
     approved BOOLEAN DEFAULT TRUE,
@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS facilities (
     facility_id TEXT PRIMARY KEY,
     sport TEXT NOT NULL,
     court_name TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('active', 'maintenance')) DEFAULT 'active'
+    status TEXT NOT NULL CHECK (status IN ('active', 'maintenance')) DEFAULT 'active',
+    location TEXT NOT NULL DEFAULT 'Chennai, India'
 );
 
 -- 3. BOOKINGS TABLE
@@ -98,23 +99,23 @@ INSERT INTO system_settings (key, value) VALUES
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 
--- Seed initial facilities data
-INSERT INTO facilities (facility_id, sport, court_name, status) VALUES
-('badminton_c1', 'Badminton', 'Court 1', 'active'),
-('badminton_c2', 'Badminton', 'Court 2', 'active'),
-('badminton_c3', 'Badminton', 'Court 3', 'active'),
-('basketball_c1', 'Basketball', 'Court 1', 'active'),
-('basketball_c2', 'Basketball', 'Court 2', 'active'),
-('volleyball_c1', 'Volleyball', 'Court 1', 'active'),
-('volleyball_c2', 'Volleyball', 'Court 2', 'active'),
-('tt_t1', 'Table Tennis', 'Table 1', 'active'),
-('tt_t2', 'Table Tennis', 'Table 2', 'active'),
-('carrom_b1', 'Carrom', 'Board 1', 'active'),
-('carrom_b2', 'Carrom', 'Board 2', 'active'),
-('carrom_b3', 'Carrom', 'Board 3', 'active'),
-('carrom_b4', 'Carrom', 'Board 4', 'active'),
-('carrom_b5', 'Carrom', 'Board 5', 'active'),
-('cricket_g1', 'Box Cricket', 'Ground 1', 'active')
+-- Seed initial facilities data (Chennai campus)
+INSERT INTO facilities (facility_id, sport, court_name, status, location) VALUES
+('badminton_c1', 'Badminton', 'Court 1', 'active', 'Chennai, India'),
+('badminton_c2', 'Badminton', 'Court 2', 'active', 'Chennai, India'),
+('badminton_c3', 'Badminton', 'Court 3', 'active', 'Chennai, India'),
+('basketball_c1', 'Basketball', 'Court 1', 'active', 'Chennai, India'),
+('basketball_c2', 'Basketball', 'Court 2', 'active', 'Chennai, India'),
+('volleyball_c1', 'Volleyball', 'Court 1', 'active', 'Chennai, India'),
+('volleyball_c2', 'Volleyball', 'Court 2', 'active', 'Chennai, India'),
+('tt_t1', 'Table Tennis', 'Table 1', 'active', 'Chennai, India'),
+('tt_t2', 'Table Tennis', 'Table 2', 'active', 'Chennai, India'),
+('carrom_b1', 'Carrom', 'Board 1', 'active', 'Chennai, India'),
+('carrom_b2', 'Carrom', 'Board 2', 'active', 'Chennai, India'),
+('carrom_b3', 'Carrom', 'Board 3', 'active', 'Chennai, India'),
+('carrom_b4', 'Carrom', 'Board 4', 'active', 'Chennai, India'),
+('carrom_b5', 'Carrom', 'Board 5', 'active', 'Chennai, India'),
+('cricket_g1', 'Box Cricket', 'Ground 1', 'active', 'Chennai, India')
 ON CONFLICT (facility_id) DO NOTHING;
 
 -- Seed default simulated time
@@ -625,5 +626,32 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 ALTER TABLE feedback DISABLE ROW LEVEL SECURITY;
+
+-- 11. BOOKING INVITES (organizer books; invitees accept within 5 minutes)
+CREATE TABLE IF NOT EXISTS booking_invites (
+    invite_id TEXT PRIMARY KEY,
+    booking_id TEXT NOT NULL REFERENCES bookings(booking_id) ON DELETE CASCADE,
+    organizer_employee_id TEXT NOT NULL REFERENCES users(employee_id) ON DELETE CASCADE,
+    invitee_employee_id TEXT NOT NULL REFERENCES users(employee_id) ON DELETE CASCADE,
+    invitee_name TEXT NOT NULL,
+    facility_id TEXT NOT NULL REFERENCES facilities(facility_id) ON DELETE CASCADE,
+    sport TEXT NOT NULL,
+    court_name TEXT NOT NULL,
+    slot_time TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'accepted', 'rejected', 'expired')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    responded_at TIMESTAMP WITH TIME ZONE,
+    accepted_booking_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_booking_invites_invitee_status
+    ON booking_invites(invitee_employee_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_booking_invites_slot_status
+    ON booking_invites(facility_id, slot_time, status);
+
+ALTER TABLE booking_invites DISABLE ROW LEVEL SECURITY;
 
 

@@ -13,7 +13,9 @@ import RegisterPage from './components/RegisterPage';
 import EmployeeDashboard from './components/EmployeeDashboard';
 import SecurityDashboard from './components/SecurityDashboard';
 import AdminDashboard from './components/AdminDashboard';
+import ITDashboard from './components/ITDashboard';
 import AdminSetupModal from './components/AdminSetupModal';
+import AppToast from './components/ui/AppToast';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -33,6 +35,8 @@ export default function App() {
         window.location.hash = '#/admin';
       } else if (user.role === 'security' && window.location.hash !== '#/security') {
         window.location.hash = '#/security';
+      } else if (user.role === 'it' && window.location.hash !== '#/it') {
+        window.location.hash = '#/it';
       } else if (user.role === 'employee' && !window.location.hash.startsWith('#/employee') && !window.location.hash.startsWith('#/availability')) {
         window.location.hash = '#/employee';
       }
@@ -99,6 +103,14 @@ export default function App() {
               onUpdateUser={refreshUser}
             />
           );
+        case 'it':
+          return (
+            <ITDashboard
+              user={currentUser}
+              onLogout={handleLogout}
+              onUpdateUser={refreshUser}
+            />
+          );
         default:
           return (
             <div className="p-8 text-center">
@@ -151,6 +163,18 @@ export default function App() {
       );
     }
 
+    if (currentHash === '#/it') {
+      return (
+        <LoginPage
+          onSuccess={handleAuthSuccess}
+          onNavigateBack={() => { window.location.hash = '#/'; setScreen('landing'); }}
+          onNavigateRegister={() => { window.location.hash = '#/'; setScreen('register'); }}
+          onOpenAdminSetup={() => setIsAdminSetupOpen(true)}
+          restrictRole="it"
+        />
+      );
+    }
+
     // Standard Landing/Register/Login screens based on state
     switch (screen) {
       case 'login':
@@ -188,10 +212,12 @@ export default function App() {
     }
   };
 
+  const showSimulatedTime = import.meta.env.VITE_SHOW_SIMULATED_TIME === 'true';
+
   return (
     <div className="flex flex-col min-h-screen">
-      {/* Global Simulated Time Policy Tracker Header */}
-      <SimulatedTimeHeader />
+      {/* Demo/sim controls — hide in production unless VITE_SHOW_SIMULATED_TIME=true */}
+      {showSimulatedTime && <SimulatedTimeHeader />}
       
       {/* Dynamic Screen Area */}
       <div className="flex-1 flex flex-col">
@@ -206,6 +232,8 @@ export default function App() {
           refreshUser();
         }}
       />
+
+      <AppToast />
     </div>
   );
 }

@@ -215,7 +215,7 @@ export default function SimulatedTimeHeader() {
 
       {/* Floating sliding email Toast alert */}
       {showToast && latestEmail && (
-        <div id="simulated_email_toast" className="fixed bottom-4 right-4 max-w-sm w-full bg-slate-900 border border-blue-500 text-white rounded-2xl shadow-2xl p-4 flex gap-3 z-[110] animate-slide-in">
+        <div id="simulated_email_toast" className="fixed top-20 right-4 max-w-sm w-[calc(100%-2rem)] sm:w-full bg-slate-900 border border-blue-500 text-white rounded-2xl shadow-2xl p-4 flex gap-3 z-[110] animate-slide-in">
           <div className="bg-blue-900/50 text-blue-400 p-2 rounded-xl h-fit self-start border border-blue-800">
             <Mail className="w-5 h-5 animate-bounce" />
           </div>

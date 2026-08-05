@@ -5,19 +5,37 @@
 
 import React, { useState, useEffect } from 'react';
 import { db } from '../lib/database';
-import { User, Booking, Facility, SlotTime, SportType, WaitlistEntry } from '../types';
-import { SLOT_TIMES } from '../data/initialData';
-import { Calendar, RefreshCw, XCircle, Clock, CheckCircle, Activity, Info, AlertTriangle, QrCode, Download, Star } from 'lucide-react';
+import { User, Booking, Facility, SlotTime, SportType, WaitlistEntry, BookingInvite } from '../types';
+import { DEFAULT_SPORTS, SLOT_TIMES } from '../data/initialData';
+import { normalizeLocation } from '../data/tcsLocations';
+import { Calendar, RefreshCw, XCircle, Clock, CheckCircle, Activity, Info, AlertTriangle, QrCode, Download, UserPlus } from 'lucide-react';
 import NotificationBell from './NotificationBell';
 import QRCodeSVG from './QRCodeSVG';
 import AIChatAssistant from './AIChatAssistant';
+import Modal from './ui/Modal';
+import { showAppToast } from './ui/AppToast';
+import RaiseConcernForm from './RaiseConcernForm';
+import TicketInbox from './TicketInbox';
+import {
+  formatCampusTime,
+  getWallClockIST,
+  isDemoSimulatedTimeEnabled,
+  isEmployeeOnlineBookingOpen,
+  isFacilitiesOpen,
+  isSecurityDeskBookingOpen,
+  isSlotPastOrStarted,
+  normalizeSlotLabel,
+  slotTimeFromHour
+} from '../lib/timeWindows';
 
-const THEMES = {
+type PortalTheme = 'blue' | 'dark';
+const THEMES: Record<PortalTheme, { navBg: string; primaryBtn: string; text: string }> = {
   blue: { navBg: 'bg-[#003366]', primaryBtn: 'bg-[#003366] hover:bg-blue-900', text: 'text-[#003366]' },
-  dark: { navBg: 'bg-[#0f172a]', primaryBtn: 'bg-[#0f172a] hover:bg-slate-900', text: 'text-[#0f172a]' },
-  green: { navBg: 'bg-[#064e3b]', primaryBtn: 'bg-[#064e3b] hover:bg-emerald-900', text: 'text-[#064e3b]' },
-  purple: { navBg: 'bg-[#3b0764]', primaryBtn: 'bg-[#3b0764] hover:bg-fuchsia-900', text: 'text-[#3b0764]' }
+  dark: { navBg: 'bg-[#0f172a]', primaryBtn: 'bg-[#0f172a] hover:bg-slate-900', text: 'text-[#0f172a]' }
 };
+function readPortalTheme(): PortalTheme {
+  return localStorage.getItem('playsmart_theme') === 'dark' ? 'dark' : 'blue';
+}
 
 interface EmployeeDashboardProps {
   user: User;
@@ -29,21 +47,27 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([]);
+  const [myInvites, setMyInvites] = useState<BookingInvite[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<BookingInvite[]>([]);
+  const [nowTs, setNowTs] = useState(Date.now());
   const [selectedSport, setSelectedSport] = useState<SportType>('Badminton');
-  const [simTime, setSimTime] = useState({ hour: 9, minute: 0 });
-  const [activeTab, setActiveTab] = useState<'availability' | 'my_bookings' | 'profile' | 'feedback'>('availability');
-  const [feedbackSubject, setFeedbackSubject] = useState('Facility Cleanliness');
-  const [feedbackContent, setFeedbackContent] = useState('');
-  const [feedbackRating, setFeedbackRating] = useState(5);
-  const [feedbackError, setFeedbackError] = useState('');
-  const [feedbackSuccess, setFeedbackSuccess] = useState('');
+  const [locationSports, setLocationSports] = useState<SportType[]>([...DEFAULT_SPORTS]);
+  /** Live campus clock for freeze/availability — not stuck on async refresh */
+  const [simTime, setSimTime] = useState(() => getWallClockIST());
+  const [activeTab, setActiveTab] = useState<'availability' | 'my_bookings' | 'profile' | 'concerns'>('availability');
 
   const [slotTimes, setSlotTimes] = useState<SlotTime[]>(() => {
-    const cached = localStorage.getItem('playsmart_slot_times');
+    const loc = normalizeLocation(user.businessUnit) || 'Chennai, India';
+    const cached =
+      localStorage.getItem(`playsmart_slot_times::${loc}`) ||
+      (loc === 'Chennai, India' ? localStorage.getItem('playsmart_slot_times') : null);
     return cached ? JSON.parse(cached) : SLOT_TIMES;
   });
   const [sportCapacities, setSportCapacities] = useState<Record<string, number>>(() => {
-    const cached = localStorage.getItem('playsmart_sport_capacities');
+    const loc = normalizeLocation(user.businessUnit) || 'Chennai, India';
+    const cached =
+      localStorage.getItem(`playsmart_sport_capacities::${loc}`) ||
+      (loc === 'Chennai, India' ? localStorage.getItem('playsmart_sport_capacities') : null);
     return cached ? JSON.parse(cached) : {
       'Badminton': 4,
       'Carrom': 4,
@@ -70,84 +94,130 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
   const [profileSuccess, setProfileSuccess] = useState('');
 
   // Theme state
-  const [theme, setTheme] = useState<'blue' | 'dark' | 'green' | 'purple'>((localStorage.getItem('playsmart_theme') as any) || 'blue');
+  const [theme, setTheme] = useState<PortalTheme>(readPortalTheme);
   
   // Modals
   const [bookingModal, setBookingModal] = useState<{ facility: Facility; slot: SlotTime } | null>(null);
-  const [modalEmployeeId, setModalEmployeeId] = useState('');
-  const [modalEmail, setModalEmail] = useState('');
-  const [p2EmpId, setP2EmpId] = useState('');
-  const [p2Name, setP2Name] = useState('');
-  const [p2Email, setP2Email] = useState('');
-  const [p3EmpId, setP3EmpId] = useState('');
-  const [p3Name, setP3Name] = useState('');
-  const [p3Email, setP3Email] = useState('');
-  const [p4EmpId, setP4EmpId] = useState('');
-  const [p4Name, setP4Name] = useState('');
-  const [p4Email, setP4Email] = useState('');
+  const [inviteRows, setInviteRows] = useState<Array<{ employeeId: string; name: string }>>([
+    { employeeId: '', name: '' }
+  ]);
   const [qrModal, setQrModal] = useState<Booking | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [inviteActionMsg, setInviteActionMsg] = useState('');
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    danger?: boolean;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
 
   useEffect(() => {
     if (bookingModal) {
-      setModalEmployeeId(user.employeeId);
-      setModalEmail(user.email);
-    } else {
-      setModalEmployeeId('');
-      setModalEmail('');
-      setP2EmpId(''); setP2Name(''); setP2Email('');
-      setP3EmpId(''); setP3Name(''); setP3Email('');
-      setP4EmpId(''); setP4Name(''); setP4Email('');
+      setInviteRows([{ employeeId: '', name: '' }]);
+      setErrorMsg('');
     }
-  }, [bookingModal, user]);
+  }, [bookingModal]);
+
+  // Keep campus clock ticking independently so past-slot freeze never depends on a failed API refresh
+  useEffect(() => {
+    const tick = () => {
+      setNowTs(Date.now());
+      if (isDemoSimulatedTimeEnabled()) {
+        db.getSimulatedTime().then(setSimTime).catch(() => setSimTime(getWallClockIST()));
+      } else {
+        setSimTime(getWallClockIST());
+      }
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const refreshData = async () => {
     try {
-      const [facs, books, wlist, time, slots, capacities] = await Promise.all([
-        db.getFacilities(),
+      const userLocation = normalizeLocation(user.businessUnit) || 'Chennai, India';
+      const [facs, books, wlist, slots, capacities, invites, allPending, sports] = await Promise.all([
+        db.getFacilities(userLocation),
         db.getBookings(),
         db.getWaitlist(),
-        db.getSimulatedTime(),
-        db.getSlotTimes(),
-        db.getSportCapacities()
+        db.getSlotTimes(userLocation),
+        db.getSportCapacities(userLocation),
+        db.getInvitesForEmployee(user.employeeId),
+        db.getAllPendingInvites(),
+        db.getLocationSports(userLocation)
       ]);
       setFacilities(facs);
       setBookings(books);
       setWaitlist(wlist);
-      setSimTime(time);
       setSlotTimes(slots);
       setSportCapacities(capacities);
+      setLocationSports(sports);
+      if (sports.length > 0 && !sports.includes(selectedSport)) {
+        setSelectedSport(sports[0]);
+      }
+      setMyInvites(invites);
+      setPendingInvites(allPending);
+      // Clock is owned by the tick effect; still sync once on successful refresh in demo mode
+      if (isDemoSimulatedTimeEnabled()) {
+        const time = await db.getSimulatedTime();
+        setSimTime(time);
+      } else {
+        setSimTime(getWallClockIST());
+      }
     } catch (e) {
       console.error('Error refreshing dashboard data:', e);
+      // Never leave freeze clock stuck if data refresh fails
+      if (!isDemoSimulatedTimeEnabled()) setSimTime(getWallClockIST());
     }
   };
 
   useEffect(() => {
     refreshData();
 
-    const handleStorageUpdate = () => {
+    let lastFacilityToastAt = 0;
+    const toastFacilitiesUpdated = () => {
+      const now = Date.now();
+      if (now - lastFacilityToastAt < 4000) return;
+      lastFacilityToastAt = now;
+      showAppToast('Courts and facilities updated for your campus.', 'info');
+    };
+
+    const handleStorageUpdate = (e?: Event) => {
       refreshData();
-      const storedTheme = localStorage.getItem('playsmart_theme') || 'blue';
-      setTheme(storedTheme as any);
+      setTheme(readPortalTheme());
+      const key = (e as StorageEvent | undefined)?.key;
+      if (key === 'playsmart_facilities_rev') {
+        toastFacilitiesUpdated();
+      }
     };
     const handleTimeChange = () => refreshData();
     const handleSlotsChange = () => refreshData();
     const handleCapacitiesChange = () => refreshData();
+    const handleFacilitiesChange = () => {
+      refreshData();
+      toastFacilitiesUpdated();
+    };
+    const handleSportsChange = () => refreshData();
 
     window.addEventListener('storage', handleStorageUpdate);
     window.addEventListener('simulated_time_change', handleTimeChange);
     window.addEventListener('slot_times_change', handleSlotsChange);
     window.addEventListener('sport_capacities_change', handleCapacitiesChange);
+    window.addEventListener('facilities_change', handleFacilitiesChange);
+    window.addEventListener('location_sports_change', handleSportsChange);
 
     const interval = setInterval(() => {
       refreshData();
-    }, 3000);
+    }, 2500);
 
     return () => {
       window.removeEventListener('storage', handleStorageUpdate);
       window.removeEventListener('simulated_time_change', handleTimeChange);
       window.removeEventListener('slot_times_change', handleSlotsChange);
       window.removeEventListener('sport_capacities_change', handleCapacitiesChange);
+      window.removeEventListener('facilities_change', handleFacilitiesChange);
+      window.removeEventListener('location_sports_change', handleSportsChange);
       clearInterval(interval);
     };
   }, []);
@@ -195,7 +265,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
     }
   };
 
-  const handleThemeChange = (newTheme: 'blue' | 'dark' | 'green' | 'purple') => {
+  const handleThemeChange = (newTheme: PortalTheme) => {
     setTheme(newTheme);
     localStorage.setItem('playsmart_theme', newTheme);
     window.dispatchEvent(new Event('storage'));
@@ -221,45 +291,87 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
     }
   };
 
-  // Compute the current active hour slot (e.g. 9:00 AM matches "9-10 AM")
-  const getCurrentSlotTime = (): SlotTime | 'none' => {
-    const hr = simTime.hour;
-    if (hr >= 6 && hr < 7) return '6-7 AM';
-    if (hr >= 7 && hr < 8) return '7-8 AM';
-    if (hr >= 8 && hr < 9) return '8-9 AM';
-    if (hr >= 9 && hr < 10) return '9-10 AM';
-    if (hr >= 10 && hr < 11) return '10-11 AM';
-    if (hr >= 11 && hr < 12) return '11-12 PM';
-    if (hr >= 12 && hr < 13) return '12-1 PM';
-    if (hr >= 13 && hr < 14) return '1-2 PM';
-    if (hr >= 14 && hr < 15) return '2-3 PM';
-    if (hr >= 15 && hr < 16) return '3-4 PM';
-    if (hr >= 16 && hr < 17) return '4-5 PM';
-    if (hr >= 17 && hr < 18) return '5-6 PM';
-    if (hr >= 18 && hr < 19) return '6-7 PM';
-    if (hr >= 19 && hr < 20) return '7-8 PM';
-    return 'none';
-  };
-
-  const currentSlot = getCurrentSlotTime();
+  const currentSlot = slotTimeFromHour(simTime.hour);
 
   const SPORT_CAPACITIES = sportCapacities;
 
-  // Compute status for a given facility & slot
-  const getSlotStatus = (facilityId: string, slot: SlotTime): 'available' | 'booked' | 'playing' | 'maintenance' => {
+  const getCourtCapacity = (facility: Facility) =>
+    facility.playerCapacity && facility.playerCapacity > 0
+      ? facility.playerCapacity
+      : SPORT_CAPACITIES[facility.sport] || 4;
+
+  const sameSlot = (a: string, b: string) => normalizeSlotLabel(a) === normalizeSlotLabel(b);
+
+  const getOccupiedCount = (facilityId: string, slot: SlotTime) => {
+    const confirmed = bookings.filter(
+      b => b.facilityId === facilityId && sameSlot(b.slotTime, slot) && b.status !== 'cancelled'
+    ).length;
+    const reserved = pendingInvites.filter(
+      i => i.facilityId === facilityId && sameSlot(i.slotTime, slot) && i.status === 'pending'
+    ).length;
+    return confirmed + reserved;
+  };
+
+  // Compute status for a given facility & slot (includes pending invite seat reservations + current time)
+  const getSlotStatus = (
+    facilityId: string,
+    slot: SlotTime
+  ): 'available' | 'booked' | 'playing' | 'maintenance' | 'past' | 'locked' => {
     const facility = facilities.find(f => f.facilityId === facilityId);
     if (!facility || facility.status === 'maintenance') return 'maintenance';
+    // Time freeze: started/ended slots + outside operating hours
+    if (!isFacilitiesOpen(simTime) || isSlotPastOrStarted(slot, simTime)) return 'past';
 
-    const slotBookings = bookings.filter(b => b.facilityId === facilityId && b.slotTime === slot && b.status !== 'cancelled');
-    const capacity = SPORT_CAPACITIES[facility.sport] || 4;
+    const slotBookings = bookings.filter(
+      b => b.facilityId === facilityId && sameSlot(b.slotTime, slot) && b.status !== 'cancelled'
+    );
+    const capacity = getCourtCapacity(facility);
+    const occupied = getOccupiedCount(facilityId, slot);
 
-    if (slotBookings.length >= capacity) {
+    if (occupied >= capacity) {
       const isAnyCheckedIn = slotBookings.some(b => b.status === 'checked_in');
       if (isAnyCheckedIn) return 'playing';
       return 'booked';
     }
 
+    // Free seat but employee online window is closed (e.g. 5–10 AM desk-only)
+    if (!isEmployeeOnlineBookingOpen(simTime)) return 'locked';
+
     return 'available';
+  };
+
+  const getInviteRemainingMs = (expiresAt: string) =>
+    Math.max(0, new Date(expiresAt).getTime() - nowTs);
+
+  const formatInviteCountdown = (expiresAt: string) => {
+    const remaining = getInviteRemainingMs(expiresAt);
+    const mins = Math.floor(remaining / 60000);
+    const secs = Math.floor((remaining % 60000) / 1000);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handleAcceptInvite = async (inviteId: string) => {
+    setInviteActionMsg('');
+    const res = await db.acceptInvite(inviteId, user.employeeId);
+    if (res.success) {
+      setInviteActionMsg('Invite accepted. Your seat is confirmed.');
+      refreshData();
+    } else {
+      setInviteActionMsg(res.error || 'Failed to accept invite.');
+      refreshData();
+    }
+  };
+
+  const handleRejectInvite = async (inviteId: string) => {
+    setInviteActionMsg('');
+    const res = await db.rejectInvite(inviteId, user.employeeId);
+    if (res.success) {
+      setInviteActionMsg('Invite rejected. Seat released.');
+      refreshData();
+    } else {
+      setInviteActionMsg(res.error || 'Failed to reject invite.');
+      refreshData();
+    }
   };
 
   // Helper to get booking details for a cell
@@ -283,11 +395,11 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
       } else if (currentSlot !== 'none') {
         const stat = getSlotStatus(f.facilityId, currentSlot);
         if (stat === 'available') available++;
-        else if (stat === 'booked') booked++;
+        else if (stat === 'booked' || stat === 'past' || stat === 'locked') booked++;
         else if (stat === 'playing') playing++;
       } else {
-        // Outside operating hours
-        available++;
+        // Outside operating hours — treat as unavailable
+        booked++;
       }
     });
 
@@ -298,31 +410,59 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
     if (!bookingModal) return;
     setErrorMsg('');
 
+    const additionalPlayers = inviteRows
+      .map(r => ({ employeeId: r.employeeId.trim().toUpperCase(), name: r.name.trim() }))
+      .filter(r => r.employeeId);
+
+    for (const p of additionalPlayers) {
+      if (!p.name) {
+        setErrorMsg(`Enter the registered name for Employee ID ${p.employeeId}.`);
+        return;
+      }
+    }
+
     const res = await db.createBooking({
       employeeId: user.employeeId,
       email: user.email,
       facilityId: bookingModal.facility.facilityId,
       slotTime: bookingModal.slot,
-      bookingSource: 'online'
+      bookingSource: 'online',
+      additionalPlayers
     });
 
     if (res.success) {
       setBookingModal(null);
+      if (res.invitesSent && res.invitesSent > 0) {
+        showAppToast(
+          `Booking confirmed. ${res.invitesSent} invite(s) sent. Invitees have 5 minutes to Accept.`,
+          'success'
+        );
+      } else {
+        showAppToast('Booking confirmed. Your seat is reserved.', 'success');
+      }
       refreshData();
     } else {
       setErrorMsg(res.error || 'Failed to complete booking.');
     }
   };
 
-  const handleCancelBooking = async (bookingId: string) => {
-    if (confirm('Are you sure you want to cancel this booking? This slot will immediately become available to others.')) {
-      const res = await db.cancelBooking(bookingId);
-      if (res.success) {
-        refreshData();
-      } else {
-        alert(res.error);
+  const handleCancelBooking = (bookingId: string) => {
+    setPendingConfirm({
+      title: 'Cancel this booking?',
+      message: 'This slot will immediately become available to others.',
+      confirmLabel: 'Cancel booking',
+      danger: true,
+      onConfirm: async () => {
+        const res = await db.cancelBooking(bookingId);
+        setPendingConfirm(null);
+        if (res.success) {
+          showAppToast('Booking cancelled.', 'info');
+          refreshData();
+        } else {
+          showAppToast(res.error || 'Failed to cancel booking.', 'error');
+        }
       }
-    }
+    });
   };
 
   const handleJoinWaitlist = async (facility: Facility, slot: SlotTime) => {
@@ -336,40 +476,23 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
     }
   };
 
-  const handleLeaveWaitlist = async (waitlistId: string) => {
-    if (confirm('Are you sure you want to leave the waitlist for this slot?')) {
-      const res = await db.leaveWaitlist(waitlistId);
-      if (res.success) {
-        refreshData();
+  const handleLeaveWaitlist = (waitlistId: string) => {
+    setPendingConfirm({
+      title: 'Leave waitlist?',
+      message: 'You will lose your place in line for this slot.',
+      confirmLabel: 'Leave waitlist',
+      danger: true,
+      onConfirm: async () => {
+        const res = await db.leaveWaitlist(waitlistId);
+        setPendingConfirm(null);
+        if (res.success) {
+          showAppToast('You left the waitlist.', 'info');
+          refreshData();
+        } else {
+          showAppToast('Failed to leave waitlist.', 'error');
+        }
       }
-    }
-  };
-
-  const handleFeedbackSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFeedbackError('');
-    setFeedbackSuccess('');
-    
-    if (!feedbackContent.trim()) {
-      setFeedbackError('Comment content is required.');
-      return;
-    }
-    
-    const res = await db.submitFeedback(
-      user.employeeId,
-      user.name,
-      feedbackSubject,
-      feedbackContent.trim(),
-      feedbackRating
-    );
-    
-    if (res.success) {
-      setFeedbackSuccess('Your comment feedback was successfully sent to the admin team!');
-      setFeedbackContent('');
-      setFeedbackRating(5);
-    } else {
-      setFeedbackError(res.error || 'Failed to submit feedback.');
-    }
+    });
   };
 
   const isWaitlisted = (facilityId: string, slot: SlotTime): boolean => {
@@ -395,32 +518,35 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
     if (res.success) {
       setQrModal(null);
       refreshData();
-      alert('Simulated Check-In Successful! Enjoy your game.');
+      showAppToast('Simulated check-in successful. Enjoy your game!', 'success');
+    } else {
+      showAppToast(res.error || 'Check-in failed.', 'error');
     }
   };
 
-  const isSecurityBookingOnly = simTime.hour >= 5 && simTime.hour < 10;
+  const isSecurityBookingOnly = isSecurityDeskBookingOpen(simTime);
+  const isOnlineBookingOpen = isEmployeeOnlineBookingOpen(simTime);
 
   return (
-    <div id="employee_dashboard" className="min-h-screen bg-[#F8FAFC] text-slate-800">
+    <div id="employee_dashboard" className="min-h-screen tcs-campus-bg text-slate-800 flex flex-col">
       {/* Top Corporate Nav */}
       <nav className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white py-3.5 px-4 sm:px-6 lg:px-8 shadow-sm transition-all duration-300`}>
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-white/10 rounded flex items-center justify-center font-bold italic text-white shadow-sm border border-white/15">P</div>
+            <img src="/tcs_logo.png" className="h-8 w-auto object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS" />
             <div>
               <span className="font-display font-bold text-lg text-white block leading-tight">
-                PlaySmart
+                TCS Play-Smart
               </span>
               <span className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider block">
-                Employee Hub
+                Employee · {user.businessUnit || 'Campus'}
               </span>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
             {/* Real-time sync notifications */}
-            <NotificationBell employeeId={user.employeeId} />
+            <NotificationBell employeeId={user.employeeId} variant="onDark" />
 
             <div className="hidden sm:flex items-center gap-2 text-right">
               {user.avatar ? (
@@ -433,7 +559,8 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
               <div>
                 <span className="text-xs font-semibold text-white block text-left">{user.name}</span>
                 <span className="text-[10px] text-blue-200/80 font-mono block text-left">
-                  {user.employeeId} | {user.department}{user.phoneNumber ? ` | Phone: ${user.phoneNumber}` : ''}
+                  Emp ID: {user.employeeId}
+                  {user.phoneNumber ? ` · ${user.phoneNumber}` : ''}
                 </span>
               </div>
             </div>
@@ -449,14 +576,77 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Welcome Block */}
         <div className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white rounded-2xl p-6 shadow-sm mb-6 border border-black/10 transition-all duration-300`}>
           <h1 className="font-display text-2xl font-bold tracking-tight">Welcome back, {user.name}!</h1>
           <p className="text-blue-100/90 text-sm mt-1 max-w-2xl font-sans">
-            TCS Siruseri Chennai Sports Facility Status Center. Check today's grid, track slots, and make reservation check-ins instantly.
+            TCS Play-Smart employee hub for{' '}
+            <span className="font-semibold text-white">{user.businessUnit || 'your location'}</span>.
+            Book courts, manage invites, and track your slots at this campus only.
           </p>
         </div>
+
+        {/* Pending match invites — Accept / Reject within 5 minutes */}
+        {(() => {
+          const pendingMine = myInvites.filter(i => i.status === 'pending' && new Date(i.expiresAt).getTime() > nowTs);
+          if (pendingMine.length === 0) return null;
+          return (
+            <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 mb-6 shadow-md space-y-3 ring-2 ring-amber-200/60">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <p className="font-bold text-sm uppercase tracking-wider text-amber-950">Action needed · Match invites</p>
+                  <p className="text-[11px] text-amber-800 mt-0.5">Accept within 5 minutes or your reserved seat is released.</p>
+                </div>
+                {inviteActionMsg && <p className="text-[11px] text-amber-900 font-semibold bg-white/70 px-2 py-1 rounded-lg">{inviteActionMsg}</p>}
+              </div>
+              {pendingMine.map(inv => {
+                const remainingMs = getInviteRemainingMs(inv.expiresAt);
+                const urgent = remainingMs <= 60000;
+                return (
+                  <div
+                    key={inv.inviteId}
+                    className={`bg-white rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-2 ${
+                      urgent ? 'border-rose-400 animate-pulse' : 'border-amber-200'
+                    }`}
+                  >
+                    <div className="text-sm text-slate-700 min-w-0">
+                      <p className="font-bold text-slate-900 text-base">{inv.sport} · {inv.courtName}</p>
+                      <p className="text-slate-600 text-xs mt-0.5 font-mono">{inv.slotTime}</p>
+                      <p className="text-slate-500 text-xs mt-1">
+                        From organizer <span className="font-mono font-semibold">{inv.organizerEmployeeId}</span>
+                      </p>
+                      <div className={`mt-2 inline-flex items-baseline gap-2 rounded-xl px-3 py-1.5 ${
+                        urgent ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-900'
+                      }`}>
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Expires in</span>
+                        <span className="font-mono font-black text-2xl tabular-nums leading-none">
+                          {formatInviteCountdown(inv.expiresAt)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 shrink-0 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={() => handleAcceptInvite(inv.inviteId)}
+                        className="flex-1 sm:flex-none px-5 py-3 text-sm font-bold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-md"
+                      >
+                        Accept invite
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRejectInvite(inv.inviteId)}
+                        className="flex-1 sm:flex-none px-4 py-3 text-sm font-bold rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 cursor-pointer"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         {/* Dynamic Warning Banners (Section 3.1 Banners) */}
         {isSecurityBookingOnly && (
@@ -465,7 +655,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
             <div>
               <p className="font-bold text-xs uppercase tracking-wider">Direct Online Booking is Locked</p>
               <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
-                The Employee Direct Self-Service booking window is frozen between 5:00 AM and 10:00 AM to prevent concurrency server congestion. 
+                Online self-booking is frozen between 5:00 AM and 10:00 AM — use the Security desk for morning bookings. 
                 You can still browse current court grids, but bookings can only be placed on your behalf by physical walk-in at the security gate desk.
               </p>
             </div>
@@ -484,24 +674,24 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
           </div>
         )}
 
-        {(simTime.hour >= 10 && simTime.hour < 20) && (
+        {isOnlineBookingOpen && (
           <div className="bg-emerald-50 border border-emerald-250 text-emerald-800 p-4 rounded-2xl mb-6 flex items-start gap-3 shadow-sm animate-fade-in">
             <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
             <div>
               <p className="font-bold text-xs uppercase tracking-wider">Employee Self Booking Active</p>
               <p className="text-xs text-emerald-700 mt-0.5 leading-relaxed">
-                Direct online self-service booking is active until 8:00 PM today. Choose any green slot cell in the timeline matrix to secure your reservation!
+                Direct online self-service booking is active until 8:00 PM. Past time slots are locked; only future open cells can be booked.
               </p>
             </div>
           </div>
         )}
 
-        {/* Navigation Tabs */}
-        <div className="flex border-b border-slate-200 mb-6 gap-2">
+        {/* Navigation Tabs — horizontal scroll on small screens */}
+        <div className="flex border-b border-slate-200 mb-6 gap-1 overflow-x-auto scrollbar-thin -mx-1 px-1">
           <button
             id="tab_availability_btn"
             onClick={() => setActiveTab('availability')}
-            className={`pb-3 px-4 font-display font-semibold text-sm border-b-2 cursor-pointer transition-all ${
+            className={`pb-3 px-3 sm:px-4 font-display font-semibold text-sm border-b-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'availability' ? `${THEMES[theme]?.text || 'text-[#003366]'} border-current` : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
@@ -510,34 +700,34 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
           <button
             id="tab_my_bookings_btn"
             onClick={() => setActiveTab('my_bookings')}
-            className={`pb-3 px-4 font-display font-semibold text-sm border-b-2 cursor-pointer transition-all flex items-center gap-1.5 ${
+            className={`pb-3 px-3 sm:px-4 font-display font-semibold text-sm border-b-2 cursor-pointer transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'my_bookings' ? `${THEMES[theme]?.text || 'text-[#003366]'} border-current` : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
             My Bookings & History
-            {myActiveBookings.length > 0 && (
+            {(myActiveBookings.length > 0 || myInvites.some(i => i.status === 'pending')) && (
               <span className={`text-white font-mono text-[10px] px-1.5 py-0.5 rounded-full font-bold ${THEMES[theme]?.navBg || 'bg-[#003366]'}`}>
-                {myActiveBookings.length}
+                {myActiveBookings.length + myInvites.filter(i => i.status === 'pending').length}
               </span>
             )}
           </button>
           <button
             id="tab_profile_btn"
             onClick={() => setActiveTab('profile')}
-            className={`pb-3 px-4 font-display font-semibold text-sm border-b-2 cursor-pointer transition-all ${
+            className={`pb-3 px-3 sm:px-4 font-display font-semibold text-sm border-b-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
               activeTab === 'profile' ? `${THEMES[theme]?.text || 'text-[#003366]'} border-current` : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
             My Profile & Settings
           </button>
           <button
-            id="tab_feedback_btn"
-            onClick={() => setActiveTab('feedback')}
-            className={`pb-3 px-4 font-display font-semibold text-sm border-b-2 cursor-pointer transition-all ${
-              activeTab === 'feedback' ? `${THEMES[theme]?.text || 'text-[#003366]'} border-current` : 'border-transparent text-slate-500 hover:text-slate-800'
+            id="tab_concerns_btn"
+            onClick={() => setActiveTab('concerns')}
+            className={`pb-3 px-3 sm:px-4 font-display font-semibold text-sm border-b-2 cursor-pointer transition-all whitespace-nowrap shrink-0 ${
+              activeTab === 'concerns' ? `${THEMES[theme]?.text || 'text-[#003366]'} border-current` : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            Feedback & Comments
+            Raise Concern
           </button>
         </div>
 
@@ -558,8 +748,20 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                 </button>
               </div>
 
+              {facilities.length === 0 ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
+                  <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-amber-900">
+                    Admin hasn’t configured courts for {user.businessUnit || 'your campus'} yet
+                  </p>
+                  <p className="text-xs text-amber-800/80 mt-1 max-w-md mx-auto">
+                    Ask your location admin to add sports and courts under Facilities &amp; Maintenance.
+                    This page updates automatically when they publish changes.
+                  </p>
+                </div>
+              ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {(['Badminton', 'Basketball', 'Volleyball', 'Table Tennis', 'Carrom', 'Box Cricket'] as SportType[]).map(sport => {
+                {locationSports.map(sport => {
                   const stats = getSportStats(sport);
                   const icons: Record<string, string> = {
                     'Badminton': '🏸',
@@ -573,7 +775,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                     <div key={sport} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-lg hover:scale-[1.03] hover:border-blue-200 active:scale-[0.99] transition-all duration-300 ease-out cursor-default">
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex items-center gap-2">
-                          <span className="text-2xl" role="img" aria-label={sport}>{icons[sport]}</span>
+                          <span className="text-2xl" role="img" aria-label={sport}>{icons[sport] || '🏟️'}</span>
                           <h3 className="font-display font-bold text-slate-900">{sport}</h3>
                         </div>
                         <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded font-mono font-bold">
@@ -603,6 +805,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                   );
                 })}
               </div>
+              )}
             </div>
 
             {/* Timeline Slot Matrix (Section 12 & 13) */}
@@ -610,15 +813,21 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                 <div>
                   <h3 className="font-display font-bold text-slate-900 text-lg">Timeline Slot Matrix</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Explore the full operating window grid (6:00 AM – 8:00 PM) for any court.</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Explore the full operating window grid (6:00 AM – 8:00 PM). Slots at or before the current campus time are frozen.
+                  </p>
+                  <p className="text-[11px] font-mono font-bold text-[#003366] mt-1">
+                    Campus clock: {formatCampusTime(simTime)}
+                    {isDemoSimulatedTimeEnabled() ? ' (demo)' : ''}
+                  </p>
                 </div>
 
-                {/* Sport Selector */}
+                {/* Sport Selector — location-specific categories */}
                 <div className="flex flex-wrap gap-1.5">
-                  {(['Badminton', 'Basketball', 'Volleyball', 'Table Tennis', 'Carrom', 'Box Cricket'] as SportType[]).map(sport => (
+                  {locationSports.map(sport => (
                     <button
                       key={sport}
-                      id={`sport_select_${sport.toLowerCase().replace(' ', '_')}`}
+                      id={`sport_select_${sport.toLowerCase().replace(/\s+/g, '_')}`}
                       onClick={() => setSelectedSport(sport)}
                       className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                         selectedSport === sport
@@ -632,32 +841,45 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                 </div>
               </div>
 
-              {/* Grid instructions */}
-              <div className="flex flex-wrap gap-4 text-[11px] font-bold text-slate-600 mb-5 pb-3 border-b border-slate-100">
+              {/* Grid instructions — text + color (not color-only) */}
+              <div className="flex flex-wrap gap-4 text-[11px] font-bold text-slate-600 mb-3 pb-3 border-b border-slate-100">
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 block"></span>
-                  <span>🟢 Available (Select to Book)</span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 block" aria-hidden />
+                  <span>Available — select to book</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 block"></span>
-                  <span>🔴 Booked</span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 block" aria-hidden />
+                  <span>Full — join waitlist</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500 block"></span>
-                  <span>🟡 Playing</span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500 block" aria-hidden />
+                  <span>Playing — in progress</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-slate-300 block"></span>
-                  <span>⚪ Maintenance</span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-300 block" aria-hidden />
+                  <span>Offline — maintenance</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-400 block" aria-hidden />
+                  <span>Past — time passed</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-orange-400 block" aria-hidden />
+                  <span>Locked — booking window closed</span>
                 </div>
               </div>
+              <p className="sm:hidden text-[11px] text-slate-500 font-semibold mb-3">
+                Swipe sideways to see more time slots →
+              </p>
 
               {/* Responsive Horizontal Scroll Grid */}
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto overscroll-x-contain -mx-2 px-2">
                 <table className="w-full min-w-[1000px] border-collapse">
                   <thead>
                     <tr className="border-b border-slate-200">
-                      <th className="text-left py-3 px-4 font-display font-semibold text-xs text-slate-400 uppercase tracking-wider w-40">Court/Table</th>
+                      <th className="sticky left-0 z-20 bg-white text-left py-3 px-4 font-display font-semibold text-xs text-slate-400 uppercase tracking-wider w-40 shadow-[2px_0_6px_-2px_rgba(0,0,0,0.08)]">
+                        Court/Table
+                      </th>
                       {slotTimes.map(slot => (
                         <th key={slot} className="text-center py-3 px-2 font-mono text-[10px] text-slate-400 uppercase font-semibold">
                           {slot}
@@ -666,11 +888,22 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
+                    {facilities.filter(f => f.sport === selectedSport).length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={slotTimes.length + 1}
+                          className="py-10 px-4 text-center text-xs text-slate-500"
+                        >
+                          No {selectedSport} courts at {user.businessUnit || 'this campus'} yet.
+                          Ask your location admin to add them under Facilities &amp; Maintenance.
+                        </td>
+                      </tr>
+                    )}
                     {facilities
                       .filter(f => f.sport === selectedSport)
                       .map(court => (
                         <tr key={court.facilityId} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="py-4 px-4 font-display font-bold text-slate-800 text-sm">
+                          <td className="sticky left-0 z-10 bg-white py-4 px-4 font-display font-bold text-slate-800 text-sm shadow-[2px_0_6px_-2px_rgba(0,0,0,0.08)]">
                             {court.courtName}
                             {court.status === 'maintenance' && (
                               <span className="block text-[10px] text-rose-500 font-normal">Under Maintenance</span>
@@ -679,19 +912,31 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                           {slotTimes.map(slot => {
                             const status = getSlotStatus(court.facilityId, slot);
                             const slotBookings = bookings.filter(b => b.facilityId === court.facilityId && b.slotTime === slot && b.status !== 'cancelled');
-                            const capacity = SPORT_CAPACITIES[court.sport] || 4;
+                            const capacity = getCourtCapacity(court);
+                            const occupied = getOccupiedCount(court.facilityId, slot);
                             const isRegisteredInSlot = slotBookings.some(b => b.employeeId === user.employeeId);
                             const userWaitlisted = isWaitlisted(court.facilityId, slot);
                             const waitlistCount = getWaitlistCount(court.facilityId, slot);
 
                             let btnStyle = '';
                             let label = '';
+                            // Joined bookings stay openable; past/maintenance/locked empty cells stay frozen
+                            const isFrozen =
+                              status === 'maintenance' ||
+                              status === 'past' ||
+                              (status === 'locked' && !isRegisteredInSlot);
                             if (status === 'maintenance') {
                               btnStyle = 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed';
                               label = 'Offline';
+                            } else if (status === 'past' && !isRegisteredInSlot) {
+                              btnStyle = 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed';
+                              label = 'Past';
                             } else if (isRegisteredInSlot) {
                               btnStyle = 'bg-blue-50 border-blue-200 text-blue-700 font-bold hover:bg-blue-100/70 cursor-pointer';
-                              label = `Joined (${slotBookings.length}/${capacity})`;
+                              label = `Joined (${occupied}/${capacity})`;
+                            } else if (status === 'locked') {
+                              btnStyle = 'bg-orange-50 text-orange-700 border-orange-200 cursor-not-allowed';
+                              label = isSecurityBookingOnly ? 'Desk only' : 'Locked';
                             } else if (status === 'booked') {
                               if (userWaitlisted) {
                                 btnStyle = 'bg-amber-50 border-amber-200 text-amber-700 font-bold hover:bg-amber-100 cursor-pointer';
@@ -710,17 +955,19 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                               }
                             } else {
                               btnStyle = 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 font-bold cursor-pointer';
-                              label = `Join (${slotBookings.length}/${capacity})`;
+                              label = `Book (${occupied}/${capacity})`;
                             }
 
                             return (
                               <td key={slot} className="p-2 text-center">
                                 <button
                                   id={`slot_btn_${court.facilityId}_${slot.replace(/[\s-]/g, '_')}`}
-                                  disabled={status === 'maintenance'}
+                                  disabled={isFrozen}
                                   onClick={() => {
+                                    if (isFrozen) return;
                                     setBookingModal({ facility: court, slot });
                                   }}
+                                  aria-label={`${court.courtName} ${slot}: ${label}`}
                                   className={`w-full py-2.5 px-1 rounded-xl text-[11px] border transition-all ${btnStyle}`}
                                 >
                                   {label}
@@ -1046,7 +1293,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                      Business Unit (Read-only)
+                      Location (Read-only)
                     </label>
                     <input
                       type="text"
@@ -1143,7 +1390,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
               {/* Theme Preferences Card */}
               <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm">
                 <h3 className="font-display font-bold text-slate-900 text-sm mb-1">Portal Theme Preferences</h3>
-                <p className="text-[11px] text-slate-500 mb-4">Choose a color layout signature for your workspace header.</p>
+                <p className="text-[11px] text-slate-500 mb-4">TCS Blue is the default campus look. Midnight is optional for the header only.</p>
 
                 <div className="grid grid-cols-2 gap-3">
                   <button
@@ -1167,28 +1414,6 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                     <div className="w-6 h-6 rounded-full bg-[#0f172a] border border-white/20 shadow-sm"></div>
                     <span className="text-[10px]">Midnight</span>
                   </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleThemeChange('green')}
-                    className={`p-3 rounded-2xl border text-center flex flex-col items-center gap-1.5 cursor-pointer transition-all ${
-                      theme === 'green' ? 'border-[#064e3b] bg-emerald-50/40 text-[#064e3b] font-bold' : 'border-slate-200 hover:border-slate-300 text-slate-600'
-                    }`}
-                  >
-                    <div className="w-6 h-6 rounded-full bg-[#064e3b] border border-white/20 shadow-sm"></div>
-                    <span className="text-[10px]">Emerald</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleThemeChange('purple')}
-                    className={`p-3 rounded-2xl border text-center flex flex-col items-center gap-1.5 cursor-pointer transition-all ${
-                      theme === 'purple' ? 'border-[#3b0764] bg-fuchsia-50/40 text-[#3b0764] font-bold' : 'border-slate-200 hover:border-slate-300 text-slate-600'
-                    }`}
-                  >
-                    <div className="w-6 h-6 rounded-full bg-[#3b0764] border border-white/20 shadow-sm"></div>
-                    <span className="text-[10px]">Royal Purple</span>
-                  </button>
                 </div>
               </div>
 
@@ -1197,125 +1422,68 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
           </div>
         )}
 
-        {activeTab === 'feedback' && (
-          <div className="bg-white rounded-3xl p-8 border border-slate-200 shadow-sm max-w-2xl mx-auto">
-            <div className="mb-6">
-              <h3 className="font-display font-bold text-slate-900 text-lg">Employee Feedback & Comment Board</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Submit your comments, complaints, or suggestions regarding facilities, timing slots, or campus logistics directly to the administration.</p>
+        {activeTab === 'concerns' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-sm">
+              <div className="mb-6">
+                <h3 className="font-display font-bold text-slate-900 text-lg">Raise a Concern</h3>
+                <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                  File a ticket for court problems, app issues, or general process concerns.
+                  Court → Security, Application → IT, General → Admin. Unactioned tickets escalate after 10 minutes.
+                </p>
+              </div>
+              <RaiseConcernForm user={user} />
             </div>
-
-            {feedbackError && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl">
-                {feedbackError}
-              </div>
-            )}
-
-            {feedbackSuccess && (
-              <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold rounded-xl">
-                {feedbackSuccess}
-              </div>
-            )}
-
-            <form onSubmit={handleFeedbackSubmit} className="space-y-6">
-              <div>
-                <label className="block text-xs font-semibold text-slate-650 uppercase tracking-wider mb-2">
-                  Feedback Topic / Subject
-                </label>
-                <select
-                  value={feedbackSubject}
-                  onChange={(e) => setFeedbackSubject(e.target.value)}
-                  className="block w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white text-slate-900 font-semibold"
-                >
-                  <option value="Facility Cleanliness">Facility Cleanliness</option>
-                  <option value="Equipment Wear-and-Tear">Equipment Wear-and-Tear</option>
-                  <option value="Timing Slots & Schedule">Timing Slots & Schedule</option>
-                  <option value="Booking System Policy">Booking System Policy</option>
-                  <option value="Other Operations Issues">Other Operations Issues</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-650 uppercase tracking-wider mb-2">
-                  Satisfaction Rating
-                </label>
-                <div className="flex items-center gap-1.5">
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <button
-                      key={star}
-                      type="button"
-                      onClick={() => setFeedbackRating(star)}
-                      className="p-1 cursor-pointer transition-all hover:scale-110"
-                    >
-                      <Star
-                        className={`w-6 h-6 ${
-                          star <= feedbackRating ? 'fill-amber-400 text-amber-400' : 'text-slate-300'
-                        }`}
-                      />
-                    </button>
-                  ))}
-                  <span className="text-xs text-slate-400 font-bold ml-2">
-                    {feedbackRating === 5 ? 'Excellent 🌟' :
-                     feedbackRating === 4 ? 'Good 👍' :
-                     feedbackRating === 3 ? 'Average 😐' :
-                     feedbackRating === 2 ? 'Poor 👎' : 'Very Bad ⚠️'}
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-650 uppercase tracking-wider mb-2">
-                  Your Comments / Suggestions
-                </label>
-                <textarea
-                  required
-                  rows={4}
-                  value={feedbackContent}
-                  onChange={(e) => setFeedbackContent(e.target.value)}
-                  placeholder="Tell us what can be improved, or provide details about court wear/scheduling issues..."
-                  className="block w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white text-slate-900 font-medium"
-                />
-              </div>
-
-              <div className="flex justify-end border-t border-slate-100 pt-4">
-                <button
-                  type="submit"
-                  className={`px-6 py-2.5 ${THEMES[theme]?.primaryBtn || 'bg-[#003366] hover:bg-blue-900'} text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-sm uppercase tracking-wider`}
-                >
-                  Submit Comment
-                </button>
-              </div>
-            </form>
+            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-sm">
+              <TicketInbox user={user} showMine title="My submitted tickets" />
+            </div>
           </div>
         )}
       </main>
 
+      <footer className="h-10 bg-white/70 border-t border-slate-200 px-6 flex items-center justify-between text-[11px] font-medium text-slate-500 shrink-0">
+        <span className="truncate">{user.businessUnit || 'TCS Campus'} · Employee Hub</span>
+        <div className="flex gap-2 items-center shrink-0">
+          <span className="w-2 h-2 bg-[#003366] rounded-full animate-pulse" />
+          <span>TCS Play-Smart Employee</span>
+        </div>
+      </footer>
+
       {/* Booking Confirmation Dialog Modal */}
       {bookingModal && (() => {
         const slotBookings = bookings.filter(b => b.facilityId === bookingModal.facility.facilityId && b.slotTime === bookingModal.slot && b.status !== 'cancelled');
+        const slotPending = pendingInvites.filter(i => i.facilityId === bookingModal.facility.facilityId && i.slotTime === bookingModal.slot);
         const myBooking = slotBookings.find(b => b.employeeId === user.employeeId);
         const isJoined = !!myBooking;
-        const capacity = SPORT_CAPACITIES[bookingModal.facility.sport] || 4;
-        const isFull = slotBookings.length >= capacity;
+        const capacity = getCourtCapacity(bookingModal.facility);
+        const occupied = getOccupiedCount(bookingModal.facility.facilityId, bookingModal.slot);
+        const isFull = occupied >= capacity;
+        const seatsLeft = Math.max(0, capacity - occupied);
         const slotStatus = getSlotStatus(bookingModal.facility.facilityId, bookingModal.slot);
         const isBookedOrPlaying = slotStatus === 'booked' || slotStatus === 'playing';
         const userIsWaitlisted = isWaitlisted(bookingModal.facility.facilityId, bookingModal.slot);
         const wEntry = waitlist.find(w => w.employeeId === user.employeeId && w.facilityId === bookingModal.facility.facilityId && w.slotTime === bookingModal.slot);
 
+        const modalTitle = isJoined
+          ? 'Manage Reservation'
+          : (isFull ? 'Waitlist for Sport Slot' : 'Confirm booking');
+
         return (
-          <div id="booking_confirmation_modal" className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-3xl max-w-md w-full border border-slate-200 overflow-hidden shadow-2xl animate-scale-in">
-              <div className="p-6">
-                <h3 className="font-display font-extrabold text-slate-900 text-xl tracking-tight">
-                  {isJoined 
-                    ? 'Manage Reservation' 
-                    : (isFull ? 'Waitlist for Sport Slot' : 'Confirm Join Match')}
-                </h3>
-                <p className="text-xs text-slate-500 mt-1">
+          <Modal
+            isOpen
+            onClose={() => {
+              setBookingModal(null);
+              setErrorMsg('');
+            }}
+            title={modalTitle}
+            maxWidthClass="max-w-lg"
+          >
+                <p className="text-xs text-slate-500 -mt-1 mb-1">
                   {isJoined 
                     ? 'You are registered for this match slot. You can cancel below.' 
                     : (isFull 
-                        ? 'This slot is fully booked. You can join the waitlist.' 
-                        : 'Join this match slot as an individual player:')}
+                        ? 'This slot is fully booked (including pending invites). You can join the waitlist.' 
+                        : 'Your seat confirms immediately. Inviting teammates is optional.')}
                 </p>
 
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 my-5 space-y-2 text-sm">
@@ -1399,28 +1567,103 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
 
                     <div className="mb-4 border-t border-slate-200 pt-4">
                       <span className="text-xs font-bold text-slate-700 uppercase tracking-wide block mb-2">
-                        Joined Players ({slotBookings.length} / {capacity})
+                        Seats ({occupied} / {capacity}) — {seatsLeft} free
                       </span>
                       <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 divide-y divide-slate-100 max-h-36 overflow-y-auto">
                         {slotBookings.map((player, idx) => (
                           <div key={player.bookingId} className="py-1.5 flex justify-between text-xs text-slate-700">
                             <span className="font-semibold">{idx + 1}. {player.employeeName} {player.employeeId === user.employeeId && <span className="text-blue-600 font-bold">(You)</span>}</span>
-                            <span className="font-mono text-slate-400">{player.employeeId}</span>
+                            <span className="font-mono text-emerald-600">Confirmed</span>
                           </div>
                         ))}
-                        {slotBookings.length === 0 && (
-                          <div className="py-2 text-center text-xs text-slate-400 italic">No players joined yet. Be the first!</div>
+                        {slotPending.map((inv, idx) => (
+                          <div key={inv.inviteId} className="py-1.5 flex justify-between text-xs text-slate-700">
+                            <span className="font-semibold">{slotBookings.length + idx + 1}. {inv.inviteeName}</span>
+                            <span className="font-mono text-amber-600">Pending {formatInviteCountdown(inv.expiresAt)}</span>
+                          </div>
+                        ))}
+                        {slotBookings.length === 0 && slotPending.length === 0 && (
+                          <div className="py-2 text-center text-xs text-slate-400 italic">No players yet. Book and invite teammates.</div>
                         )}
                       </div>
                     </div>
 
                     {!isJoined && !isFull && (
+                      <div className="mb-4 border border-slate-200 rounded-2xl p-4 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <UserPlus className="w-4 h-4 text-[#003366]" />
+                          <span className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                            Invite players (optional)
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 leading-relaxed">
+                          Leave blank to book alone. Unregistered IDs cannot be invited. Each invite reserves a seat for 5 minutes.
+                        </p>
+                        {inviteRows.map((row, idx) => (
+                          <div key={idx} className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label htmlFor={`invite_emp_${idx}`} className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                Employee ID
+                              </label>
+                              <input
+                                id={`invite_emp_${idx}`}
+                                value={row.employeeId}
+                                onChange={(e) => {
+                                  const next = [...inviteRows];
+                                  next[idx] = { ...next[idx], employeeId: e.target.value };
+                                  setInviteRows(next);
+                                }}
+                                placeholder="e.g. EMP123"
+                                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label htmlFor={`invite_name_${idx}`} className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                Registered name
+                              </label>
+                              <input
+                                id={`invite_name_${idx}`}
+                                value={row.name}
+                                onChange={(e) => {
+                                  const next = [...inviteRows];
+                                  next[idx] = { ...next[idx], name: e.target.value };
+                                  setInviteRows(next);
+                                }}
+                                placeholder="Exact registered name"
+                                className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={inviteRows.length >= seatsLeft - 1}
+                            onClick={() => setInviteRows([...inviteRows, { employeeId: '', name: '' }])}
+                            className="text-[11px] font-bold text-[#003366] hover:underline disabled:text-slate-400 disabled:no-underline cursor-pointer"
+                          >
+                            + Add another player
+                          </button>
+                          {inviteRows.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setInviteRows(inviteRows.slice(0, -1))}
+                              className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer"
+                            >
+                              Remove last
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {!isJoined && !isFull && (
                       <div className="bg-blue-50 border border-blue-100 text-blue-800 text-xs p-3 rounded-xl flex items-start gap-2 mb-4">
                         <Info className="w-4 h-4 shrink-0 text-blue-500" />
                         <div>
-                          <span className="font-bold">PlayPass Confirmation</span>
+                          <span className="font-bold">Invite rules</span>
                           <p className="mt-0.5 leading-relaxed text-blue-700">
-                            Confirming your participation will instantly issue a simulated check-in pass.
+                            Your seat confirms now. Invitees get in-app + email notice and must Accept within 5 minutes or the invite expires.
                           </p>
                         </div>
                       </div>
@@ -1480,39 +1723,30 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                   ) : (
                     <button
                       id="submit_booking_confirm_modal"
-                      disabled={isSecurityBookingOnly}
+                      disabled={isSecurityBookingOnly || !isOnlineBookingOpen || slotStatus === 'past'}
                       onClick={handleCreateBooking}
                       className={`flex-1 py-3 text-xs font-bold rounded-xl text-white transition-all cursor-pointer ${
-                        isSecurityBookingOnly
+                        isSecurityBookingOnly || !isOnlineBookingOpen || slotStatus === 'past'
                           ? 'bg-slate-400 cursor-not-allowed shadow-none'
                           : 'bg-[#003366] hover:bg-[#002244] shadow-md'
                       }`}
                     >
-                      Join Match
+                      {slotStatus === 'past'
+                        ? 'Slot time passed'
+                        : !isOnlineBookingOpen
+                          ? 'Booking frozen now'
+                          : 'Confirm booking'}
                     </button>
                   )}
                 </div>
-              </div>
-            </div>
-          </div>
+          </Modal>
         );
       })()}
 
       {/* QR Code Pass Simulator Modal */}
       {qrModal && (
-        <div id="qr_modal" className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl max-w-sm w-full border border-slate-200 overflow-hidden shadow-2xl animate-scale-in text-center">
-            <div className="p-6">
-              <div className="flex justify-between items-center mb-4">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">TCS PLAYPASS</span>
-                <button
-                  onClick={() => setQrModal(null)}
-                  className="text-slate-400 hover:text-slate-600 font-bold"
-                >
-                  ✕
-                </button>
-              </div>
-
+        <Modal isOpen onClose={() => setQrModal(null)} title="TCS PlayPass" maxWidthClass="max-w-sm">
+              <div className="text-center">
               <h4 className="font-display font-bold text-slate-800 text-base">{qrModal.sport} Check-In</h4>
               <p className="text-[10px] text-slate-400 font-mono mt-0.5">{qrModal.courtName} | {qrModal.slotTime}</p>
 
@@ -1558,10 +1792,36 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                   Simulate Guard Scanning Pass
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
+              </div>
+        </Modal>
       )}
+
+      <Modal
+        isOpen={!!pendingConfirm}
+        onClose={() => setPendingConfirm(null)}
+        title={pendingConfirm?.title || 'Confirm'}
+        maxWidthClass="max-w-md"
+      >
+        <p className="text-sm text-slate-600 leading-relaxed">{pendingConfirm?.message}</p>
+        <div className="flex gap-3 mt-6">
+          <button
+            type="button"
+            onClick={() => setPendingConfirm(null)}
+            className="flex-1 py-2.5 border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl cursor-pointer"
+          >
+            Keep
+          </button>
+          <button
+            type="button"
+            onClick={() => pendingConfirm?.onConfirm()}
+            className={`flex-1 py-2.5 text-xs font-bold rounded-xl text-white cursor-pointer ${
+              pendingConfirm?.danger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[#003366] hover:bg-[#002244]'
+            }`}
+          >
+            {pendingConfirm?.confirmLabel || 'Confirm'}
+          </button>
+        </div>
+      </Modal>
 
       <AIChatAssistant user={user} />
     </div>

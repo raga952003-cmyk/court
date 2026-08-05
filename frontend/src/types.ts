@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type UserRole = 'employee' | 'security' | 'admin';
+export type UserRole = 'employee' | 'security' | 'admin' | 'it';
 
 export interface User {
   id: string;
@@ -23,13 +23,18 @@ export interface User {
   createdAt: string;
 }
 
-export type SportType = 'Badminton' | 'Basketball' | 'Volleyball' | 'Table Tennis' | 'Carrom' | 'Box Cricket';
+/** Sport / game name — location admins can add custom categories (not limited to a fixed set). */
+export type SportType = string;
 
 export interface Facility {
   facilityId: string;
   sport: SportType;
   courtName: string;
   status: 'active' | 'maintenance';
+  /** TCS office location (same values as user.businessUnit / Location on register) */
+  location: string;
+  /** Optional per-court max players; if unset, location sport capacity is used */
+  playerCapacity?: number;
 }
 
 export type SlotTime = 
@@ -93,5 +98,56 @@ export interface WaitlistEntry {
   courtName: string;
   slotTime: SlotTime;
   createdAt: string;
+}
+
+export type InviteStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
+
+export interface BookingInvite {
+  inviteId: string;
+  bookingId: string;
+  organizerEmployeeId: string;
+  inviteeEmployeeId: string;
+  inviteeName: string;
+  facilityId: string;
+  sport: SportType;
+  courtName: string;
+  slotTime: SlotTime;
+  status: InviteStatus;
+  createdAt: string;
+  expiresAt: string;
+  respondedAt?: string;
+  acceptedBookingId?: string;
+}
+
+export interface InvitePlayerInput {
+  employeeId: string;
+  name: string;
+}
+
+export type TicketCategory = 'general' | 'court' | 'application';
+export type TicketQueue = 'admin' | 'security' | 'it';
+export type TicketStatus = 'open' | 'acknowledged' | 'in_progress' | 'resolved' | 'closed' | 'escalated';
+
+export interface SupportTicket {
+  ticketId: string;
+  reporterEmployeeId: string;
+  reporterName: string;
+  reporterRole: 'employee' | 'admin';
+  category: TicketCategory;
+  subject: string;
+  details: string;
+  facilityId?: string;
+  courtName?: string;
+  sport?: string;
+  assignedQueue: TicketQueue;
+  status: TicketStatus;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  createdAt: string;
+  escalateAt: string;
+  escalatedAt?: string;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
+  assignedToEmployeeId?: string;
+  resolutionNotes?: string;
 }
 

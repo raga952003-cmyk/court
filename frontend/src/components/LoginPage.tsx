@@ -5,21 +5,26 @@
 
 import React, { useState } from 'react';
 import { db } from '../lib/database';
-import { KeyRound, User, ChevronLeft, ShieldAlert, ArrowRight, Activity } from 'lucide-react';
+import { showAppToast } from './ui/AppToast';
+import { KeyRound, User, ChevronLeft, ShieldAlert, Eye, EyeOff } from 'lucide-react';
 
 interface LoginPageProps {
   onSuccess: () => void;
   onNavigateBack: () => void;
   onNavigateRegister: () => void;
   onOpenAdminSetup?: () => void;
-  restrictRole?: 'admin' | 'security' | 'employee';
+  restrictRole?: 'admin' | 'security' | 'employee' | 'it';
 }
 
 export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegister, onOpenAdminSetup, restrictRole }: LoginPageProps) {
   const [employeeId, setEmployeeId] = useState('');
-  const [password, setPassword] = useState(''); 
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [hasAdmin, setHasAdmin] = useState(true);
+  const [recoverOpen, setRecoverOpen] = useState(false);
+  const [recoverValue, setRecoverValue] = useState('');
+  const [recoverLoading, setRecoverLoading] = useState(false);
 
   React.useEffect(() => {
     db.hasAdmin().then(res => setHasAdmin(res)).catch(() => setHasAdmin(true));
@@ -33,6 +38,10 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
       setError('Please enter your TCS Employee ID.');
       return;
     }
+    if (!password) {
+      setError('Please enter your password.');
+      return;
+    }
 
     const result = await db.loginUser(employeeId, password);
     if (result.success && result.user) {
@@ -43,6 +52,8 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
           setError('This login portal is restricted to Administrator accounts only.');
         } else if (activeRole === 'security') {
           setError('This login portal is restricted to Security personnel only.');
+        } else if (activeRole === 'it') {
+          setError('This login portal is restricted to IT Support accounts only.');
         } else {
           setError('This login portal is restricted to Employee Hub users. Please use your role-specific URL.');
         }
@@ -55,35 +66,46 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
   };
 
   const handleForgotPassword = async () => {
-    if (restrictRole === 'admin') {
-      const email = prompt("Forgot Admin credentials? Please enter your registered Administrator Email Address:");
-      if (!email) return;
+    setError('');
+    setRecoverValue('');
+    setRecoverOpen(true);
+  };
 
-      setError('');
-      const res = await db.recoverAdminCredentials(email);
-      if (res.success) {
-        alert(`Admin Credentials Recovery Successful!\n\nA simulated recovery email has been sent to ${email} containing your TCS Employee ID and temporary password details. Click the "Outbox Log" button in the simulated header to view it.`);
-        window.dispatchEvent(new Event('simulated_email_sent'));
+  const submitRecovery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!recoverValue.trim()) {
+      setError(restrictRole === 'admin' ? 'Enter your admin email.' : 'Enter your Employee ID.');
+      return;
+    }
+    setRecoverLoading(true);
+    setError('');
+    try {
+      if (restrictRole === 'admin') {
+        const res = await db.recoverAdminCredentials(recoverValue.trim());
+        if (res.success) {
+          showAppToast(res.message || 'Recovery email sent. Check Outbox / email.', 'success');
+          window.dispatchEvent(new Event('simulated_email_sent'));
+          setRecoverOpen(false);
+        } else {
+          setError(res.error || 'Recovery failed.');
+        }
       } else {
-        setError(res.error || 'Recovery failed.');
+        const res = await db.forgotPassword(recoverValue.trim());
+        if (res.success) {
+          showAppToast(res.message || 'Temporary password sent. Check Outbox / email.', 'success');
+          window.dispatchEvent(new Event('simulated_email_sent'));
+          setRecoverOpen(false);
+        } else {
+          setError(res.error || 'Password recovery failed.');
+        }
       }
-    } else {
-      const empId = prompt("Please enter your TCS Employee ID to recover your password:");
-      if (!empId) return;
-      
-      setError('');
-      const res = await db.forgotPassword(empId);
-      if (res.success) {
-        alert(`Password recovery request successful!\n\nA simulated recovery email has been dispatched. Click the "Outbox Log" button in the simulated header to view it.`);
-        window.dispatchEvent(new Event('simulated_email_sent'));
-      } else {
-        setError(res.error || 'Password recovery failed.');
-      }
+    } finally {
+      setRecoverLoading(false);
     }
   };
 
   return (
-    <div id="login_screen" className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+    <div id="login_screen" className="min-h-screen tcs-auth-bg flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <button
           id="login_back_btn"
@@ -93,14 +115,15 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
           <ChevronLeft className="w-4 h-4" /> Back to home
         </button>
         <div className="flex items-center justify-center gap-3 mb-4">
-          <img src="/tcs_logo.png" className="h-8 object-contain" alt="TCS Logo" />
-          <span className="text-xl font-bold tracking-tight text-[#003366] font-display">PlaySmart</span>
-          <span className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded text-[9px] font-semibold uppercase tracking-wider font-sans">Campus Hub</span>
+          <img src="/tcs_logo.png" className="h-9 object-contain bg-white rounded px-1.5 py-0.5 shadow-sm" alt="TCS Logo" />
+          <span className="text-xl font-bold tracking-tight text-[#003366] font-display">TCS Play-Smart</span>
+          <span className="px-2 py-0.5 bg-[#003366]/10 text-[#003366] rounded text-[9px] font-semibold uppercase tracking-wider font-sans">Campus Hub</span>
         </div>
         <h2 className="text-center text-2xl font-display font-extrabold text-slate-900 tracking-tight">
-          {restrictRole === 'admin' ? 'TCS PlaySmart Admin Portal' : 
-           restrictRole === 'security' ? 'TCS Security Gatekeeper' : 
-           'Login to TCS PlaySmart'}
+          {restrictRole === 'admin' ? 'TCS Play-Smart Admin Portal' :
+           restrictRole === 'security' ? 'TCS Play-Smart Security Desk' :
+           restrictRole === 'it' ? 'TCS Play-Smart IT Desk' :
+           'TCS Play-Smart Employee Hub'}
         </h2>
         <p className="mt-2 text-center text-sm text-slate-500">
           {(!restrictRole || restrictRole === 'employee') ? (
@@ -125,14 +148,14 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
           <form className="space-y-6" onSubmit={handleLogin}>
             {!hasAdmin && (
               <div id="no_admin_setup_alert" className="bg-amber-50 border border-amber-200 text-amber-800 text-xs p-3.5 rounded-xl animate-fade-in">
-                <p className="font-bold mb-1 flex items-center gap-1">⚙️ First-Time Admin Setup Needed</p>
-                <p className="mb-2 text-slate-600">No administrator has been initialized. Create the initial administrator credentials securely to begin.</p>
+                <p className="font-bold mb-1 flex items-center gap-1">First-Time Admin Setup Needed</p>
+                <p className="mb-2 text-slate-600">No administrator has been initialized. Create the initial administrator credentials to begin.</p>
                 <button
                   type="button"
                   onClick={onOpenAdminSetup}
                   className="text-amber-700 font-bold hover:text-amber-950 underline text-xs cursor-pointer block mt-1"
                 >
-                  Configure Admin Credentials Now &rarr;
+                  Configure Admin Credentials Now →
                 </button>
               </div>
             )}
@@ -157,7 +180,8 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
                   name="employeeId"
                   type="text"
                   required
-                  placeholder="e.g. EMP101, SEC202, ADM303"
+                  autoComplete="username"
+                  placeholder="e.g. EMP101"
                   value={employeeId}
                   onChange={(e) => setEmployeeId(e.target.value)}
                   className="block w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-slate-900 font-mono placeholder-slate-400"
@@ -176,15 +200,23 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
                 <input
                   id="password_input"
                   name="password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-slate-900 placeholder-slate-400"
+                  className="block w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all text-slate-900 placeholder-slate-400"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-700 cursor-pointer"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
-              <div className="flex items-center justify-between mt-2">
-                <span className="text-xs text-slate-400">Simulation bypass enabled</span>
+              <div className="flex items-center justify-end mt-2">
                 <button
                   type="button"
                   id="forgot_pwd_btn"
@@ -206,11 +238,52 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
               </button>
             </div>
           </form>
-
-
-
         </div>
       </div>
+
+      {recoverOpen && (
+        <div
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+          role="presentation"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setRecoverOpen(false); }}
+        >
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-label="Password recovery"
+            onSubmit={submitRecovery}
+            className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md p-5 space-y-4"
+          >
+            <h3 className="font-display font-bold text-slate-900 text-lg">Password recovery</h3>
+            <p className="text-xs text-slate-500">
+              {restrictRole === 'admin'
+                ? 'Enter your registered administrator email. A temporary password will be sent to the outbox / email.'
+                : 'Enter your Employee ID. A temporary password will be sent to the outbox / email.'}
+            </p>
+            <div>
+              <label htmlFor="recover_input" className="block text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">
+                {restrictRole === 'admin' ? 'Admin email' : 'Employee ID'}
+              </label>
+              <input
+                id="recover_input"
+                value={recoverValue}
+                onChange={(e) => setRecoverValue(e.target.value)}
+                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm font-mono"
+                placeholder={restrictRole === 'admin' ? 'admin@tcs.com' : 'EMP101'}
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setRecoverOpen(false)} className="flex-1 py-2.5 border border-slate-300 rounded-xl text-xs font-bold cursor-pointer">
+                Cancel
+              </button>
+              <button type="submit" disabled={recoverLoading} className="flex-1 py-2.5 bg-[#003366] text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-60">
+                {recoverLoading ? 'Sending…' : 'Send temporary password'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

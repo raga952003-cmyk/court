@@ -15,3 +15,20 @@
 @utility animate-laser {
   animation: scan-laser 2.5s ease-in-out infinite;
 }
+
+/* TCS campus shell — soft navy wash (not flat generic gray) */
+@utility tcs-campus-bg {
+  background-color: #eef3f8;
+  background-image:
+    radial-gradient(ellipse 90% 55% at 50% -15%, rgba(0, 51, 102, 0.16), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, rgba(0, 86, 150, 0.08), transparent 50%),
+    linear-gradient(165deg, #e6eef6 0%, #f3f6fa 45%, #e9eef5 100%);
+}
+
+@utility tcs-auth-bg {
+  background-color: #e8eef5;
+  background-image:
+    radial-gradient(ellipse 70% 50% at 20% 0%, rgba(0, 51, 102, 0.18), transparent 55%),
+    radial-gradient(ellipse 60% 45% at 90% 90%, rgba(0, 102, 153, 0.1), transparent 50%),
+    linear-gradient(180deg, #dce6f0 0%, #eef3f8 55%, #f5f8fb 100%);
+}

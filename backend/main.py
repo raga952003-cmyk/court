@@ -3,15 +3,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import datetime
+import os
+
+import httpx
 
 from database import db_mgr
+from email_service import send_email
 
 app = FastAPI(title="TCS PlaySmart API Server", version="1.0.0")
 
-# Enable CORS for the React Frontend (defaulting to localhost:3000)
+_cors = os.getenv("CORS_ORIGINS", "*")
+_origins = ["*"] if _cors.strip() == "*" else [o.strip() for o in _cors.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,7 +51,18 @@ class UserRegisterSchema(BaseModel):
 
 class UserLoginSchema(BaseModel):
     employeeId: str
-    password: Optional[str] = None
+    password: str
+
+class EmailSendSchema(BaseModel):
+    to: str
+    subject: str
+    body: str
+
+class AiChatSchema(BaseModel):
+    messages: List[Dict[str, Any]]
+    temperature: Optional[float] = 0.1
+    tools: Optional[List[Dict[str, Any]]] = None
+    model: Optional[str] = "llama-3.3-70b-versatile"
 
 class ForgotPasswordSchema(BaseModel):
     employeeId: str
@@ -268,6 +285,44 @@ def get_emails():
 def clear_emails():
     db_mgr.clear_simulated_emails()
     return {"success": True}
+
+@app.post("/api/emails/send")
+def send_real_email(req: EmailSendSchema):
+    """Send via SMTP when ENABLE_REAL_EMAILS=true; otherwise reports simulated mode."""
+    result = send_email(req.to, req.subject, req.body)
+    if not result.get("success"):
+        # Still OK for callers that only need best-effort delivery
+        return {"success": False, "error": result.get("error"), "simulated": True}
+    return {"success": True, "message": result.get("message")}
+
+@app.post("/api/ai/chat")
+async def ai_chat_proxy(req: AiChatSchema):
+    """Proxy Groq so the API key stays on the server (never in Vite bundle)."""
+    groq_key = os.getenv("GROQ_API_KEY") or os.getenv("VITE_GROQ_API_KEY")
+    if not groq_key:
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY is not configured on the server.")
+
+    payload: Dict[str, Any] = {
+        "model": req.model or "llama-3.3-70b-versatile",
+        "messages": req.messages,
+        "temperature": req.temperature if req.temperature is not None else 0.1,
+    }
+    if req.tools:
+        payload["tools"] = req.tools
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
 
 # --- SIMULATED TIME ---
 @app.get("/api/simulated-time")

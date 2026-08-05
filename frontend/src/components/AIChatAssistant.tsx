@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../lib/database';
-import { User, SlotTime } from '../types';
-import { MessageSquare, Send, X, Bot, User as UserIcon, Loader2, Sparkles, AlertCircle } from 'lucide-react';
+import { apiFetch } from '../lib/api';
+import { User, SportType } from '../types';
+import { normalizeLocation } from '../data/tcsLocations';
+import { Send, X, Bot, User as UserIcon, Loader2 } from 'lucide-react';
 
 interface AIChatAssistantProps {
   user: User;
@@ -14,15 +16,20 @@ interface Message {
   tool_call_id?: string;
 }
 
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || '';
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 
+function sportsLabelFrom(list: string[]): string {
+  return list.length > 0 ? list.join(', ') : 'none configured yet at this campus';
+}
+
 export default function AIChatAssistant({ user }: AIChatAssistantProps) {
+  const userLocation = normalizeLocation(user.businessUnit) || 'Chennai, India';
   const [isOpen, setIsOpen] = useState(false);
+  const [locationSports, setLocationSports] = useState<SportType[]>([]);
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: `Hello ${user.name}! 👋 I'm your TCS PlaySmart AI Assistant.\n\nI can help you with:\n• Checking available slots for any sport\n• Booking or cancelling reservations\n• Viewing your bookings\n• Getting facility status updates${user.role === 'admin' ? '\n• Managing facilities and viewing analytics' : ''}`
+      content: `Hello ${user.name}! I'm your TCS PlaySmart AI Assistant for ${userLocation}.\n\nI can help you with:\n• Checking available slots for sports at your campus\n• Booking or cancelling reservations\n• Viewing your bookings\n• Getting facility status updates${user.role === 'admin' ? '\n• Managing facilities and viewing analytics' : ''}`
     }
   ]);
   const [input, setInput] = useState('');
@@ -30,18 +37,37 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
   const [theme, setTheme] = useState<'blue' | 'dark' | 'green' | 'purple'>('blue');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const refreshLocationSports = async () => {
+    try {
+      const sports = await db.getLocationSports(userLocation);
+      setLocationSports(sports);
+      return sports;
+    } catch {
+      setLocationSports([]);
+      return [] as SportType[];
+    }
+  };
+
   useEffect(() => {
     const handleStorageUpdate = () => {
       const storedTheme = localStorage.getItem('playsmart_theme') || 'blue';
       setTheme(storedTheme as any);
     };
     handleStorageUpdate();
+    refreshLocationSports();
     window.addEventListener('storage', handleStorageUpdate);
-    return () => window.removeEventListener('storage', handleStorageUpdate);
-  }, []);
+    window.addEventListener('location_sports_change', refreshLocationSports);
+    window.addEventListener('facilities_change', refreshLocationSports);
+    return () => {
+      window.removeEventListener('storage', handleStorageUpdate);
+      window.removeEventListener('location_sports_change', refreshLocationSports);
+      window.removeEventListener('facilities_change', refreshLocationSports);
+    };
+  }, [userLocation]);
 
   useEffect(() => {
     if (isOpen) {
+      refreshLocationSports();
       scrollToBottom();
     }
   }, [messages, isOpen]);
@@ -50,23 +76,34 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const matchLocationSport = (sport: string | undefined, sports: string[]): string | null => {
+    if (!sport) return null;
+    const hit = sports.find(s => s.toLowerCase() === String(sport).trim().toLowerCase());
+    return hit || null;
+  };
+
   const executeTool = async (name: string, args: any) => {
+    const sports = locationSports.length > 0 ? locationSports : await db.getLocationSports(userLocation);
+    const sportsLabel = sportsLabelFrom(sports);
     try {
       switch (name) {
         case 'get_available_slots': {
           const { sport } = args;
-          const facs = await db.getFacilities();
+          const canonical = matchLocationSport(sport, sports);
+          if (!canonical) {
+            return `ERROR: "${sport || ''}" is not offered at ${userLocation}. Sports at this campus: ${sportsLabel}.`;
+          }
+          const facs = await db.getFacilities(userLocation);
           const books = await db.getBookings();
-          const slots = await db.getSlotTimes();
-          const capacities = await db.getSportCapacities();
+          const slots = await db.getSlotTimes(userLocation);
           const simTime = await db.getSimulatedTime();
 
-          const sportFacs = facs.filter(f => f.sport.toLowerCase() === sport.toLowerCase());
+          const sportFacs = facs.filter(f => f.sport.toLowerCase() === canonical.toLowerCase());
           if (sportFacs.length === 0) {
-            return `No courts found for sport category "${sport}".`;
+            return `No courts found for "${canonical}" at ${userLocation} yet. Sports at this campus: ${sportsLabel}. Ask your location admin to add courts.`;
           }
 
-          let report = `Available slots for ${sport} (Current Time: ${db.formatSimulatedTime(simTime)}):\n\n`;
+          let report = `Available slots for ${canonical} at ${userLocation} (Current Time: ${db.formatSimulatedTime(simTime)}):\n\n`;
           for (const f of sportFacs) {
             report += `📍 Court: "${f.courtName}" (ID: ${f.facilityId})\n`;
             report += `   Status: ${f.status === 'active' ? '✅ Active' : '🔧 Under Maintenance'}\n`;
@@ -76,7 +113,7 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
               continue;
             }
             
-            const cap = capacities[f.sport] || 4;
+            const cap = await db.getFacilityCapacity(f);
             let hasAvailableSlots = false;
             
             for (const s of slots) {
@@ -111,9 +148,13 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
 
           // Normalize slot time format
           slotTime = slotTime.trim();
-          
-          // Robust facility resolution
-          const facs = await db.getFacilities();
+          const canonicalSport = matchLocationSport(sport, sports);
+          if (sport && !canonicalSport) {
+            return `ERROR: "${sport}" is not offered at ${userLocation}. Available sports: ${sportsLabel}.`;
+          }
+
+          // Robust facility resolution (this location only)
+          const facs = await db.getFacilities(userLocation);
           let targetFac = facs.find(f => f.facilityId === facilityId);
 
           if (!targetFac && facilityId) {
@@ -124,9 +165,9 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
             );
           }
 
-          if (!targetFac && sport) {
+          if (!targetFac && canonicalSport) {
             // Match by sport and/or courtName
-            const sportFacs = facs.filter(f => f.sport.toLowerCase() === sport.toLowerCase());
+            const sportFacs = facs.filter(f => f.sport.toLowerCase() === canonicalSport.toLowerCase());
             if (courtName) {
               // Try exact match first
               targetFac = sportFacs.find(f => 
@@ -147,7 +188,7 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
           }
 
           if (!targetFac) {
-            return `ERROR: Could not find the requested court. Available sports: Badminton, Basketball, Volleyball, Table Tennis, Carrom, Box Cricket. Please specify the sport and court name.`;
+            return `ERROR: Could not find the requested court at ${userLocation}. Available sports: ${sportsLabel}. Please specify the sport and court name.`;
           }
 
           // Check if facility is under maintenance
@@ -156,7 +197,7 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
           }
 
           // Validate slot time format
-          const slots = await db.getSlotTimes();
+          const slots = await db.getSlotTimes(userLocation);
           const validSlot = slots.find(s => 
             s.toLowerCase() === slotTime.toLowerCase() || 
             s.toLowerCase().includes(slotTime.toLowerCase())
@@ -168,8 +209,7 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
 
           // Check if slot is available
           const books = await db.getBookings();
-          const capacities = await db.getSportCapacities();
-          const cap = capacities[targetFac.sport] || 4;
+          const cap = await db.getFacilityCapacity(targetFac);
           const slotBooks = books.filter(b => 
             b.facilityId === targetFac.facilityId && 
             b.slotTime === validSlot && 
@@ -244,59 +284,41 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
           return report;
         }
 
-        case 'get_overall_feedback': {
-          if (user.role !== 'admin') {
-            return "ERROR: Access Denied. Only Administrators can view overall feedback.";
-          }
-          const list = await db.getFeedbackList();
-          if (list.length === 0) {
-            return "No feedback logs submitted yet.";
-          }
-          
-          // Provide structured summary
-          const avgRating = list.reduce((sum, f) => sum + (f.rating || 0), 0) / list.length;
-          const positive = list.filter(f => (f.rating || 0) >= 4).length;
-          const negative = list.filter(f => (f.rating || 0) <= 2).length;
-          
-          let report = `📊 Feedback Summary (Total: ${list.length} responses):\n\n`;
-          report += `⭐ Average Rating: ${avgRating.toFixed(1)}/5\n`;
-          report += `😊 Positive (4-5 stars): ${positive}\n`;
-          report += `😐 Negative (1-2 stars): ${negative}\n\n`;
-          report += `Recent Comments:\n`;
-          
-          list.slice(0, 5).forEach((f, i) => {
-            report += `${i + 1}. ${f.employeeName} (${f.rating}⭐): "${f.subject}"\n`;
-            report += `   ${f.content.substring(0, 100)}${f.content.length > 100 ? '...' : ''}\n\n`;
-          });
-          
-          return report;
-        }
-
         case 'get_facility_status': {
-          const facs = await db.getFacilities();
+          const facs = await db.getFacilities(userLocation);
           const books = await db.getBookings();
-          const capacities = await db.getSportCapacities();
+          const capacities = await db.getSportCapacities(userLocation);
           
-          let report = `🏟️ All Facilities Status:\n\n`;
+          let report = `Facilities at ${userLocation}\nSports at this campus: ${sportsLabel}\n\n`;
           
           const sportGroups: Record<string, typeof facs> = {};
           facs.forEach(f => {
             if (!sportGroups[f.sport]) sportGroups[f.sport] = [];
             sportGroups[f.sport].push(f);
           });
+
+          const orderedSports = [
+            ...sports.filter(s => sportGroups[s]?.length),
+            ...Object.keys(sportGroups).filter(s => !sports.some(x => x.toLowerCase() === s.toLowerCase()))
+          ];
           
-          Object.keys(sportGroups).sort().forEach(sport => {
-            report += `${sport} (Capacity: ${capacities[sport] || 4} players/slot):\n`;
-            sportGroups[sport].forEach(f => {
+          if (orderedSports.length === 0) {
+            return `No courts configured yet at ${userLocation}. Sports list: ${sportsLabel}. Ask the location admin to add courts under Facilities & Maintenance.`;
+          }
+
+          for (const sport of orderedSports) {
+            report += `${sport} (default ${capacities[sport] || 4} players/slot):\n`;
+            for (const f of sportGroups[sport]) {
+              const courtCap = await db.getFacilityCapacity(f);
               const activeBooks = books.filter(b => 
                 b.facilityId === f.facilityId && 
                 b.status === 'confirmed'
               ).length;
               const statusIcon = f.status === 'active' ? '✅' : '🔧';
-              report += `  ${statusIcon} ${f.courtName} (${f.facilityId}) - ${activeBooks} active bookings\n`;
-            });
+              report += `  ${statusIcon} ${f.courtName} — max ${courtCap}/slot — ${activeBooks} active bookings\n`;
+            }
             report += '\n';
-          });
+          }
           
           return report;
         }
@@ -306,7 +328,7 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
             return "ERROR: Access Denied. Only Administrators can toggle maintenance.";
           }
           const { facilityId } = args;
-          await db.toggleFacilityMaintenance(facilityId);
+          await db.toggleFacilityMaintenance(facilityId, userLocation);
           window.dispatchEvent(new Event('storage'));
           return `SUCCESS: Court ID ${facilityId} maintenance toggled successfully.`;
         }
@@ -316,10 +338,14 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
             return "ERROR: Access Denied. Only Administrators can change capacities.";
           }
           const { sport, capacity } = args;
-          const caps = await db.getSportCapacities();
-          const newCaps = { ...caps, [sport]: capacity };
-          await db.saveSportCapacities(newCaps);
-          return `SUCCESS: Dynamically modified ${sport} capacity to ${capacity} players per slot.`;
+          const canonical = matchLocationSport(sport, sports);
+          if (!canonical) {
+            return `ERROR: "${sport || ''}" is not in ${userLocation}'s sport list. Available sports: ${sportsLabel}.`;
+          }
+          const caps = await db.getSportCapacities(userLocation);
+          const newCaps = { ...caps, [canonical]: capacity };
+          await db.saveSportCapacities(newCaps, userLocation);
+          return `SUCCESS: Updated ${canonical} capacity to ${capacity} players/slot at ${userLocation}.`;
         }
 
         default:
@@ -342,42 +368,45 @@ export default function AIChatAssistant({ user }: AIChatAssistantProps) {
     setIsLoading(true);
 
     try {
+      const sports =
+        locationSports.length > 0 ? locationSports : await refreshLocationSports();
+      const sportsLabel = sportsLabelFrom(sports);
       const systemPrompt: Message = {
         role: 'system',
-        content: `You are the TCS PlaySmart AI Assistant helping user: ${user.name} (Role: ${user.role}, ID: ${user.employeeId}, Email: ${user.email}).
+        content: `You are the TCS PlaySmart AI Assistant helping user: ${user.name} (Role: ${user.role}, ID: ${user.employeeId}, Email: ${user.email}, Location: ${userLocation}).
+
+CAMPUS SPORTS (use ONLY these — do not invent sports from other campuses):
+${sportsLabel}
 
 AVAILABLE TOOLS:
-1. get_available_slots(sport) - Check slot availability for any sport (Badminton, Carrom, Basketball, etc.)
+1. get_available_slots(sport) - Check slot availability for a sport at this campus only
 2. get_user_bookings(employeeId) - View all bookings for a user (current and past)
-3. get_facility_status() - Get complete facility status and active bookings overview
-4. create_booking(facilityId, slotTime, employeeId, email, sport, courtName) - Book a slot directly
+3. get_facility_status() - Get facility status for this campus
+4. create_booking(facilityId, slotTime, employeeId, email, sport, courtName) - Book a slot at this campus
 5. cancel_booking(bookingId) - Cancel an existing booking
-6. get_overall_feedback() - Admin only: View feedback analytics and sentiment
-7. toggle_court_maintenance(facilityId) - Admin only: Toggle facility maintenance status
-8. update_sport_capacity(sport, capacity) - Admin only: Change player capacity per slot
+6. toggle_court_maintenance(facilityId) - Admin only: Toggle facility maintenance status
+7. update_sport_capacity(sport, capacity) - Admin only: Change player capacity per slot for a campus sport
 
 BOOKING INSTRUCTIONS:
-- When user says "book Volleyball Court 1 from 6-7 PM", extract: sport="Volleyball", courtName="Court 1", slotTime="6-7 PM"
-- When user says "book Carrom at 11-12 PM", extract: sport="Carrom", slotTime="11-12 PM" (courtName is optional)
+- Only use sports from the CAMPUS SPORTS list above
+- When user asks for a sport not in that list, tell them the available campus sports
+- When user says "book <Sport> Court 1 from 6-7 PM", extract sport, courtName, slotTime from that request
 - Always use create_booking with sport and courtName parameters for natural language requests
-- The system will auto-resolve the facility ID from sport + court name
+- The system will auto-resolve the facility ID from sport + court name at ${userLocation}
 - Valid slot format: "6-7 PM", "8-9 AM", "11-12 PM", etc.
-- If slot time doesn't match exactly, the system will find the closest match
 - Always confirm booking success with the booking ID
 
 RESPONSE GUIDELINES:
 - Use tools proactively to fetch real-time data from the database
 - For "my bookings" queries, call get_user_bookings automatically
-- For "which courts are free", call get_available_slots for that sport
-- Provide visual indicators (✅ ❌ 🟢 🔴 📍 ⏰) in responses
+- For "which courts are free", call get_available_slots for that campus sport
 - Show booking IDs so users can reference them
 - Be conversational, helpful, and concise
-- Format responses with proper spacing and emojis for readability
 - Refuse admin-only operations if user role is not 'admin'`
       };
 
       let currentHistory: Message[] = [systemPrompt, ...messages.slice(-8), newMsg];
-      let apiResult = await callGroqAPI(currentHistory);
+      let apiResult = await callGroqAPI(currentHistory, sports);
       let newTurnMessages: Message[] = [];
 
       // Handle Tool Calls (up to 3 sequential loops to prevent infinite runs)
@@ -410,7 +439,7 @@ RESPONSE GUIDELINES:
           }
 
           // Call Groq again with tool results
-          apiResult = await callGroqAPI(currentHistory);
+          apiResult = await callGroqAPI(currentHistory, sports);
         } else {
           break;
         }
@@ -427,11 +456,8 @@ RESPONSE GUIDELINES:
     }
   };
 
-  const callGroqAPI = async (chatMessages: Message[]) => {
-    if (!GROQ_API_KEY) {
-      throw new Error('VITE_GROQ_API_KEY is not set in frontend/.env');
-    }
-
+  const callGroqAPI = async (chatMessages: Message[], sports: string[]) => {
+    const sportsLabel = sportsLabelFrom(sports);
     const formattedMessages = chatMessages.map(m => {
       const formatted: any = { role: m.role, content: m.content };
       if (m.name) formatted.name = m.name;
@@ -440,26 +466,21 @@ RESPONSE GUIDELINES:
       return formatted;
     });
 
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages: formattedMessages,
-        temperature: 0.1,
-        tools: [
+    const sportDescription =
+      sports.length > 0
+        ? `Sport category at this campus only. One of: ${sportsLabel}`
+        : `Sport category at ${userLocation}. No sports configured yet — tell the user to ask their location admin.`;
+
+    const tools = [
           {
             type: 'function',
             function: {
               name: 'get_available_slots',
-              description: 'Get real-time free slots and court statuses for a sport. Shows capacity, availability indicators, and booking status.',
+              description: `Get real-time free slots and court statuses for a sport at ${userLocation}.`,
               parameters: {
                 type: 'object',
                 properties: {
-                  sport: { type: 'string', description: 'Sport category: Badminton, Carrom, Basketball, Table Tennis, Volleyball, or Box Cricket' }
+                  sport: { type: 'string', description: sportDescription }
                 },
                 required: ['sport']
               }
@@ -482,7 +503,7 @@ RESPONSE GUIDELINES:
             type: 'function',
             function: {
               name: 'get_facility_status',
-              description: 'Get comprehensive overview of all facilities, their maintenance status, capacities, and active booking counts.',
+              description: `Get overview of facilities at ${userLocation}, including sports list, maintenance, capacities, and active bookings.`,
               parameters: {
                 type: 'object',
                 properties: {}
@@ -493,12 +514,12 @@ RESPONSE GUIDELINES:
             type: 'function',
             function: {
               name: 'create_booking',
-              description: 'Book a court/facility for a specific slot. Can use natural language: sport + courtName OR exact facilityId.',
+              description: `Book a court at ${userLocation}. Use sport + courtName OR exact facilityId. Sport must be one of the campus sports.`,
               parameters: {
                 type: 'object',
                 properties: {
                   facilityId: { type: 'string', description: 'Exact facility ID (optional if sport+courtName provided)' },
-                  sport: { type: 'string', description: 'Sport category: Volleyball, Badminton, Carrom, Basketball, Table Tennis, Box Cricket' },
+                  sport: { type: 'string', description: sportDescription },
                   courtName: { type: 'string', description: 'Court name like "Court 1", "Court 2", "Board 1", etc. (optional, defaults to first available)' },
                   slotTime: { type: 'string', description: 'Time slot like "6-7 PM", "8-9 AM", "11-12 PM"' },
                   employeeId: { type: 'string', description: 'Employee ID (defaults to current user)' },
@@ -525,17 +546,6 @@ RESPONSE GUIDELINES:
           {
             type: 'function',
             function: {
-              name: 'get_overall_feedback',
-              description: 'Retrieve feedback analytics including ratings, sentiment analysis, and recent comments. Admin only.',
-              parameters: {
-                type: 'object',
-                properties: {}
-              }
-            }
-          },
-          {
-            type: 'function',
-            function: {
               name: 'toggle_court_maintenance',
               description: 'Toggle facility maintenance status (active/offline). Admin only.',
               parameters: {
@@ -551,25 +561,33 @@ RESPONSE GUIDELINES:
             type: 'function',
             function: {
               name: 'update_sport_capacity',
-              description: 'Modify player capacity per slot for a sport category. Admin only.',
+              description: `Modify player capacity per slot for a sport at ${userLocation}. Admin only.`,
               parameters: {
                 type: 'object',
                 properties: {
-                  sport: { type: 'string', description: 'Sport category to update' },
+                  sport: { type: 'string', description: sportDescription },
                   capacity: { type: 'integer', description: 'New capacity (players per slot)' }
                 },
                 required: ['sport', 'capacity']
               }
             }
           }
-        ],
-        tool_choice: 'auto'
+    ];
+
+    const response = await apiFetch('/api/ai/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages: formattedMessages,
+        temperature: 0.1,
+        tools
       })
     });
 
     if (!response.ok) {
       const errBody = await response.text();
-      throw new Error(`Groq API error (${response.status}): ${errBody}`);
+      throw new Error(`AI proxy error (${response.status}): ${errBody}`);
     }
 
     return response.json();
@@ -590,7 +608,7 @@ RESPONSE GUIDELINES:
   };
 
   return (
-    <div className="fixed bottom-6 right-6 z-[9999] font-display">
+    <div className="fixed bottom-6 right-4 sm:right-6 z-[9999] font-display">
       {/* Floating Chat Bubble */}
       {!isOpen && (
         <button
@@ -608,9 +626,9 @@ RESPONSE GUIDELINES:
         </button>
       )}
 
-      {/* Slide-out Chat Window */}
+      {/* Slide-out Chat Window — full-screen sheet on small phones */}
       {isOpen && (
-        <div className={`w-[360px] sm:w-[400px] h-[520px] rounded-3xl border shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ${
+        <div className={`fixed inset-3 sm:static sm:inset-auto w-auto sm:w-[400px] h-[calc(100dvh-1.5rem)] sm:h-[min(520px,70vh)] rounded-3xl border shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ${
           theme === 'dark' ? 'bg-slate-950 border-slate-800 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
         }`}>
           {/* Header */}
@@ -682,7 +700,11 @@ RESPONSE GUIDELINES:
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask for Badminton slots, create a booking..."
+              placeholder={
+                locationSports[0]
+                  ? `Ask for ${locationSports[0]} slots, create a booking...`
+                  : 'Ask about slots or bookings at your campus...'
+              }
               disabled={isLoading}
               className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
             />

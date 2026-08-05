@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { db } from '../lib/database';
 import { ShieldCheck, X, User, Mail, Briefcase, KeyRound, Building, Hash, ShieldAlert } from 'lucide-react';
+import { DEFAULT_TCS_LOCATION, TCS_LOCATION_GROUPS } from '../data/tcsLocations';
 
 interface AdminSetupModalProps {
   isOpen: boolean;
@@ -18,7 +19,7 @@ export default function AdminSetupModal({ isOpen, onClose, onSuccess }: AdminSet
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [department, setDepartment] = useState('HR & Sports Committee');
-  const [businessUnit, setBusinessUnit] = useState('BU_ADM_CHN');
+  const [businessUnit, setBusinessUnit] = useState(DEFAULT_TCS_LOCATION);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
@@ -187,20 +188,28 @@ export default function AdminSetupModal({ isOpen, onClose, onSuccess }: AdminSet
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
-                  Business Unit
+                <label htmlFor="admin_setup_location" className="block text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                  Location
                 </label>
                 <div className="mt-1 relative rounded-md shadow-sm">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
                     <Building className="w-4 h-4" />
                   </div>
-                  <input
-                    type="text"
+                  <select
+                    id="admin_setup_location"
                     required
                     value={businessUnit}
                     onChange={(e) => setBusinessUnit(e.target.value)}
-                    className="block w-full pl-10 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white text-slate-950 font-mono"
-                  />
+                    className="block w-full pl-10 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white text-slate-950"
+                  >
+                    {TCS_LOCATION_GROUPS.map(group => (
+                      <optgroup key={group.region} label={group.region}>
+                        {group.locations.map(loc => (
+                          <option key={loc} value={loc}>{loc}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
