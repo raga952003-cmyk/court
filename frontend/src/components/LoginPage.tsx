@@ -105,7 +105,7 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
   };
 
   return (
-    <div id="login_screen" className="min-h-screen tcs-auth-bg flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+    <div id="login_screen" className="min-h-screen tcs-auth-bg flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <button
           id="login_back_btn"
@@ -114,12 +114,12 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
         >
           <ChevronLeft className="w-4 h-4" /> Back to home
         </button>
-        <div className="flex items-center justify-center gap-3 mb-4">
-          <img src="/tcs_logo.png" className="h-9 object-contain bg-white rounded px-1.5 py-0.5 shadow-sm" alt="TCS Logo" />
-          <span className="text-xl font-bold tracking-tight text-[#003366] font-display">TCS Play-Smart</span>
+        <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 mb-4">
+          <img src="/tcs_logo.png" className="h-8 sm:h-9 object-contain bg-white rounded px-1.5 py-0.5 shadow-sm" alt="TCS Logo" />
+          <span className="text-lg sm:text-xl font-bold tracking-tight text-[#003366] font-display">TCS Play-Smart</span>
           <span className="px-2 py-0.5 bg-[#003366]/10 text-[#003366] rounded text-[9px] font-semibold uppercase tracking-wider font-sans">Campus Hub</span>
         </div>
-        <h2 className="text-center text-2xl font-display font-extrabold text-slate-900 tracking-tight">
+        <h2 className="text-center text-xl sm:text-2xl font-display font-extrabold text-slate-900 tracking-tight px-1">
           {restrictRole === 'admin' ? 'TCS Play-Smart Admin Portal' :
            restrictRole === 'security' ? 'TCS Play-Smart Security Desk' :
            restrictRole === 'it' ? 'TCS Play-Smart IT Desk' :
@@ -144,7 +144,7 @@ export default function LoginPage({ onSuccess, onNavigateBack, onNavigateRegiste
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow-sm sm:rounded-2xl border border-slate-200">
+        <div className="bg-white py-6 sm:py-8 px-4 sm:px-6 shadow-sm rounded-2xl border border-slate-200">
           <form className="space-y-6" onSubmit={handleLogin}>
             {!hasAdmin && (
               <div id="no_admin_setup_alert" className="bg-amber-50 border border-amber-200 text-amber-800 text-xs p-3.5 rounded-xl animate-fade-in">

@@ -528,21 +528,21 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
     <div id="security_dashboard" className="min-h-screen tcs-campus-bg text-slate-800 flex flex-col justify-between">
       <div className="grow">
         {/* Top Header Navigation */}
-        <nav className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white py-3.5 px-4 sm:px-6 lg:px-8 shadow-sm transition-all duration-300`}>
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <img src="/tcs_logo.png" className="h-8 w-auto object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS" />
-              <div>
-                <span className="font-display font-extrabold text-lg text-white block leading-tight">
+        <nav className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white py-3 px-3 sm:px-6 lg:px-8 shadow-sm transition-all duration-300`}>
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <img src="/tcs_logo.png" className="h-7 sm:h-8 w-auto shrink-0 object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS" />
+              <div className="min-w-0">
+                <span className="font-display font-extrabold text-sm sm:text-lg text-white block leading-tight truncate">
                   TCS Play-Smart
                 </span>
-                <span className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider block">
+                <span className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider block truncate">
                   Security · {user.businessUnit || 'Campus'}
                 </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4 shrink-0">
               <div className="hidden md:flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${isFacilitiesOpen ? 'bg-emerald-400 animate-pulse' : 'bg-slate-400'}`} />
                 <span className="text-xs text-blue-100 font-medium">
@@ -557,7 +557,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
               <button
                 type="button"
                 onClick={() => setIsSettingsOpen(true)}
-                className="hidden sm:flex items-center gap-2 text-right cursor-pointer hover:opacity-85 transition-opacity bg-transparent border-0 p-0"
+                className="flex items-center gap-2 text-right cursor-pointer hover:opacity-85 transition-opacity bg-transparent border-0 p-0"
                 title="View Profile & Settings"
                 aria-label="Open profile and settings"
               >
@@ -568,7 +568,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                     {user.name.charAt(0).toUpperCase()}
                   </div>
                 )}
-                <div>
+                <div className="hidden sm:block">
                   <span className="text-xs font-semibold block text-slate-100 text-left">{user.name}</span>
                   <span className="text-[10px] text-blue-200/80 font-mono block text-left">Officer ID: {user.employeeId}</span>
                 </div>
@@ -577,15 +577,16 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
               <button
                 id="sec_logout_btn"
                 onClick={onLogout}
-                className="px-3 py-1.5 text-xs font-bold text-rose-300 hover:text-white hover:bg-rose-600 rounded-lg border border-rose-500/20 transition-colors cursor-pointer"
+                className="px-2.5 sm:px-3 py-1.5 text-xs font-bold text-rose-300 hover:text-white hover:bg-rose-600 rounded-lg border border-rose-500/20 transition-colors cursor-pointer"
               >
-                Sign Out
+                <span className="sm:hidden">Out</span>
+                <span className="hidden sm:inline">Sign Out</span>
               </button>
             </div>
           </div>
         </nav>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8">
         {/* Dynamic Warning Banners (Section 3.1 Banners) */}
         {isSecurityBookingWindow ? (
           <div className="bg-emerald-50 border border-emerald-150 text-emerald-800 p-4 rounded-2xl mb-8 flex items-start gap-3 shadow-sm animate-fade-in">
@@ -1197,7 +1198,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
         role="dialog"
         aria-modal="true"
         aria-label="QR scanner"
-        className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fade-in"
+        className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 animate-fade-in"
         onMouseDown={(e) => {
           if (e.target === e.currentTarget) {
             setIsScanning(false);
@@ -1205,7 +1206,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
           }
         }}
       >
-        <div className="bg-slate-900 text-white rounded-3xl max-w-2xl w-full border border-slate-800 shadow-2xl overflow-hidden flex flex-col md:flex-row h-[550px] md:h-[500px]">
+        <div className="bg-slate-900 text-white rounded-t-3xl sm:rounded-3xl max-w-2xl w-full border border-slate-800 shadow-2xl overflow-hidden flex flex-col md:flex-row max-h-[92dvh] md:h-[500px]">
           
           {/* Left side: Viewport Camera Simulation */}
           <div className="w-full md:w-1/2 bg-slate-950 p-6 flex flex-col justify-between relative border-r border-slate-800">

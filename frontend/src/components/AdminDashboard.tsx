@@ -643,25 +643,25 @@ export default function AdminDashboard({ user, onLogout, onUpdateUser }: AdminDa
     <div id="admin_dashboard" className="min-h-screen tcs-campus-bg text-slate-800 flex flex-col justify-between">
       <div className="grow">
         {/* Top Corporate Nav */}
-        <nav className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white py-3.5 px-4 sm:px-6 lg:px-8 shadow-sm transition-all duration-300`}>
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <img src="/tcs_logo.png" className="h-8 w-auto object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS" />
-              <div>
-                <span className="font-display font-bold text-lg text-white block leading-tight">
+        <nav className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white py-3 px-3 sm:px-6 lg:px-8 shadow-sm transition-all duration-300`}>
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <img src="/tcs_logo.png" className="h-7 sm:h-8 w-auto shrink-0 object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS" />
+              <div className="min-w-0">
+                <span className="font-display font-bold text-sm sm:text-lg text-white block leading-tight truncate">
                   TCS Play-Smart
                 </span>
-                <span className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider block">
+                <span className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider block truncate">
                   Admin · {adminLocation}
                 </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4 shrink-0">
               <div className="bg-white/10 rounded-xl p-0.5">
                 <NotificationBell employeeId={user.employeeId} variant="onDark" />
               </div>
-              <div className="hidden sm:flex items-center gap-2 text-right">
+              <div className="flex items-center gap-2 text-right">
                 {user.avatar ? (
                   <img src={user.avatar} className="w-7 h-7 rounded-full object-cover border border-white/25 shadow-sm" alt="Avatar" />
                 ) : (
@@ -669,24 +669,25 @@ export default function AdminDashboard({ user, onLogout, onUpdateUser }: AdminDa
                     {user.name.charAt(0).toUpperCase()}
                   </div>
                 )}
-                <div>
+                <div className="hidden sm:block">
                   <span className="text-xs font-semibold block text-slate-100 text-left">{user.name}</span>
-                  <span className="text-[10px] text-blue-200/80 font-mono block text-left">{adminLocation}</span>
+                  <span className="text-[10px] text-blue-200/80 font-mono block text-left truncate max-w-[140px]">{adminLocation}</span>
                 </div>
               </div>
 
               <button
                 id="admin_logout_btn"
                 onClick={onLogout}
-                className="px-3 py-1.5 text-xs font-bold text-rose-300 hover:text-white hover:bg-rose-600 rounded-lg border border-rose-500/20 transition-colors cursor-pointer"
+                className="px-2.5 sm:px-3 py-1.5 text-xs font-bold text-rose-300 hover:text-white hover:bg-rose-600 rounded-lg border border-rose-500/20 transition-colors cursor-pointer"
               >
-                Sign Out
+                <span className="sm:hidden">Out</span>
+                <span className="hidden sm:inline">Sign Out</span>
               </button>
             </div>
           </div>
         </nav>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8">
         
         {/* Mobile section picker */}
         <div className="md:hidden mb-4">

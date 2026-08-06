@@ -407,11 +407,11 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
     return bookings.find(b => b.facilityId === facilityId && sameSlot(b.slotTime, slot) && b.status !== 'cancelled' && b.employeeId === user.employeeId);
   };
 
-  // Calculate stats for each sport at the current simulated hour
+  // Live card counts for the current hour — occupancy only (do not treat past/locked as booked)
   const getSportStats = (sport: SportType) => {
     const sportFacs = facilities.filter(f => sameSport(f.sport, sport));
     const totalCourts = sportFacs.length;
-    
+
     let available = 0;
     let booked = 0;
     let playing = 0;
@@ -420,14 +420,23 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
     sportFacs.forEach(f => {
       if (f.status === 'maintenance') {
         maintenance++;
-      } else if (currentSlot !== 'none') {
-        const stat = getSlotStatus(f.facilityId, currentSlot);
-        if (stat === 'available') available++;
-        else if (stat === 'booked' || stat === 'past' || stat === 'locked') booked++;
-        else if (stat === 'playing') playing++;
+        return;
+      }
+
+      // Outside facility hours — leave counts at 0 (do not fake every court as booked)
+      if (currentSlot === 'none') return;
+
+      const slotBookings = bookings.filter(
+        b => b.facilityId === f.facilityId && sameSlot(b.slotTime, currentSlot) && b.status !== 'cancelled'
+      );
+      const capacity = getCourtCapacity(f);
+      const occupied = getOccupiedCount(f.facilityId, currentSlot);
+
+      if (occupied >= capacity) {
+        if (slotBookings.some(b => b.status === 'checked_in')) playing++;
+        else booked++;
       } else {
-        // Outside operating hours — treat as unavailable
-        booked++;
+        available++;
       }
     });
 
@@ -549,25 +558,25 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
   return (
     <div id="employee_dashboard" className="min-h-screen tcs-campus-bg text-slate-800 flex flex-col">
       {/* Top Corporate Nav */}
-      <nav className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white py-3.5 px-4 sm:px-6 lg:px-8 shadow-sm transition-all duration-300`}>
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <img src="/tcs_logo.png" className="h-8 w-auto object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS" />
-            <div>
-              <span className="font-display font-bold text-lg text-white block leading-tight">
+      <nav className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white py-3 px-3 sm:px-6 lg:px-8 shadow-sm transition-all duration-300`}>
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <img src="/tcs_logo.png" className="h-7 sm:h-8 w-auto shrink-0 object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS" />
+            <div className="min-w-0">
+              <span className="font-display font-bold text-sm sm:text-lg text-white block leading-tight truncate">
                 TCS Play-Smart
               </span>
-              <span className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider block">
+              <span className="text-[10px] text-blue-200 font-semibold uppercase tracking-wider block truncate">
                 Employee · {user.businessUnit || 'Campus'}
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             {/* Real-time sync notifications */}
             <NotificationBell employeeId={user.employeeId} variant="onDark" />
 
-            <div className="hidden sm:flex items-center gap-2 text-right">
+            <div className="flex items-center gap-2 text-right">
               {user.avatar ? (
                 <img src={user.avatar} className="w-7 h-7 rounded-full object-cover border border-white/25 shadow-sm" alt="Avatar" />
               ) : (
@@ -575,7 +584,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                   {user.name.charAt(0).toUpperCase()}
                 </div>
               )}
-              <div>
+              <div className="hidden sm:block">
                 <span className="text-xs font-semibold text-white block text-left">{user.name}</span>
                 <span className="text-[10px] text-blue-200/80 font-mono block text-left">
                   Emp ID: {user.employeeId}
@@ -587,19 +596,20 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
             <button
               id="emp_logout_btn"
               onClick={onLogout}
-              className="px-3 py-1.5 text-xs font-bold text-rose-300 hover:text-white hover:bg-rose-600 rounded-lg border border-rose-500/20 transition-colors cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 text-xs font-bold text-rose-300 hover:text-white hover:bg-rose-600 rounded-lg border border-rose-500/20 transition-colors cursor-pointer"
             >
-              Sign Out
+              <span className="sm:hidden">Out</span>
+              <span className="hidden sm:inline">Sign Out</span>
             </button>
           </div>
         </div>
       </nav>
 
-      <main className="grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="grow max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8">
         {/* Welcome Block */}
-        <div className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white rounded-2xl p-6 shadow-sm mb-6 border border-black/10 transition-all duration-300`}>
-          <h1 className="font-display text-2xl font-bold tracking-tight">Welcome back, {user.name}!</h1>
-          <p className="text-blue-100/90 text-sm mt-1 max-w-2xl font-sans">
+        <div className={`${THEMES[theme]?.navBg || 'bg-[#003366]'} text-white rounded-2xl p-4 sm:p-6 shadow-sm mb-4 sm:mb-6 border border-black/10 transition-all duration-300`}>
+          <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight">Welcome back, {user.name}!</h1>
+          <p className="text-blue-100/90 text-xs sm:text-sm mt-1 max-w-2xl font-sans">
             TCS Play-Smart employee hub for{' '}
             <span className="font-semibold text-white">{user.businessUnit || 'your location'}</span>.
             Book courts, manage invites, and track your slots at this campus only.
@@ -893,8 +903,8 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
               </p>
 
               {/* Responsive Horizontal Scroll Grid */}
-              <div className="overflow-x-auto overscroll-x-contain -mx-2 px-2">
-                <table className="w-full min-w-[1000px] border-collapse">
+              <div className="scroll-x-touch -mx-2 px-2">
+                <table className="w-full min-w-[720px] sm:min-w-[1000px] border-collapse">
                   <thead>
                     <tr className="border-b border-slate-200">
                       <th className="sticky left-0 z-20 bg-white text-left py-3 px-4 font-display font-semibold text-xs text-slate-400 uppercase tracking-wider w-40 shadow-[2px_0_6px_-2px_rgba(0,0,0,0.08)]">

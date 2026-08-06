@@ -6,7 +6,12 @@
 import React from 'react';
 import { ShieldCheck, Trophy, Sparkles, MapPin, Phone, Mail, ChevronRight, Activity, Calendar, Zap } from 'lucide-react';
 import { db } from '../lib/database';
-import { DEFAULT_TCS_LOCATION, TCS_LOCATION_GROUPS, sameLocation } from '../data/tcsLocations';
+import {
+  DEFAULT_TCS_LOCATION,
+  TCS_LOCATION_GROUPS,
+  getCampusContactInfo,
+  sameLocation
+} from '../data/tcsLocations';
 
 interface LandingPageProps {
   onNavigate: (page: 'login' | 'register') => void;
@@ -18,17 +23,47 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
   const [hasAdmin, setHasAdmin] = React.useState<boolean>(true);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const [campusLocation, setCampusLocation] = React.useState(DEFAULT_TCS_LOCATION);
+  const [locationAdminContacts, setLocationAdminContacts] = React.useState('');
 
   React.useEffect(() => {
     db.getFacilities().then(res => setFacilities(res)).catch(console.error);
     db.hasAdmin().then(res => setHasAdmin(res)).catch(() => setHasAdmin(true));
   }, []);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    db.getApproverContacts(campusLocation)
+      .then(({ admins, scope }) => {
+        if (cancelled) return;
+        if (!admins.length) {
+          setLocationAdminContacts('');
+          return;
+        }
+        const label = db.formatLocationAdminContacts(admins);
+        setLocationAdminContacts(
+          scope === 'location'
+            ? `Location admin: ${label}`
+            : `Campus admin contact: ${label}`
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setLocationAdminContacts('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [campusLocation]);
+
   const locationFacilities = React.useMemo(() => {
     return facilities.filter(f =>
       sameLocation(f.location || DEFAULT_TCS_LOCATION, campusLocation)
     );
   }, [facilities, campusLocation]);
+
+  const campusContact = React.useMemo(
+    () => getCampusContactInfo(campusLocation),
+    [campusLocation]
+  );
   
   // Count courts per sport type for the selected campus
   const sportSummary = locationFacilities.reduce((acc, current) => {
@@ -49,11 +84,11 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
     <div id="landing_page" className="min-h-screen flex flex-col tcs-campus-bg text-slate-800 font-sans">
       {/* Navigation */}
       <header className="bg-[#003366] text-white sticky top-0 z-40 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <img src="/tcs_logo.png" className="h-8 object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS Logo" />
-            <span className="text-xl font-bold tracking-tight font-display">TCS Play-Smart</span>
-            <span className="ml-2 px-2 py-0.5 bg-white/10 rounded text-[10px] font-semibold uppercase tracking-wider border border-white/20">Campus Hub</span>
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-16 py-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <img src="/tcs_logo.png" className="h-7 sm:h-8 shrink-0 object-contain bg-white/95 rounded px-1.5 py-0.5" alt="TCS Logo" />
+            <span className="text-base sm:text-xl font-bold tracking-tight font-display truncate">TCS Play-Smart</span>
+            <span className="hidden sm:inline-block ml-1 px-2 py-0.5 bg-white/10 rounded text-[10px] font-semibold uppercase tracking-wider border border-white/20 shrink-0">Campus Hub</span>
           </div>
 
           <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-blue-100">
@@ -62,7 +97,7 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
             <a href="#contact" className="hover:text-white transition-colors">Contact</a>
           </nav>
 
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             <button
               type="button"
               className="md:hidden p-2 rounded-lg hover:bg-white/10 cursor-pointer"
@@ -77,14 +112,14 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
             <button
               id="landing_login_btn"
               onClick={() => onNavigate('login')}
-              className="px-3 sm:px-4 py-2 text-sm font-semibold text-white hover:text-blue-100 hover:bg-white/10 rounded-lg transition-all cursor-pointer"
+              className="px-2.5 sm:px-4 py-2 text-xs sm:text-sm font-semibold text-white hover:text-blue-100 hover:bg-white/10 rounded-lg transition-all cursor-pointer"
             >
               Login
             </button>
             <button
               id="landing_register_btn"
               onClick={() => onNavigate('register')}
-              className="px-3 sm:px-4 py-2 text-sm font-semibold text-[#003366] bg-white hover:bg-blue-50 rounded-lg shadow-sm transition-all cursor-pointer"
+              className="px-2.5 sm:px-4 py-2 text-xs sm:text-sm font-semibold text-[#003366] bg-white hover:bg-blue-50 rounded-lg shadow-sm transition-all cursor-pointer"
             >
               Register
             </button>
@@ -100,7 +135,7 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
       </header>
 
       {/* Hero Section */}
-      <section className="relative overflow-hidden py-16 md:py-24 border-b border-[#003366]/10">
+      <section className="relative overflow-hidden py-12 sm:py-16 md:py-24 border-b border-[#003366]/10">
         <div
           className="absolute inset-0 opacity-90"
           style={{
@@ -110,14 +145,14 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
           aria-hidden
         />
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <div className="inline-flex items-center gap-1.5 bg-[#003366]/10 text-[#003366] px-3 py-1 rounded-full text-xs font-semibold mb-6 border border-[#003366]/15">
+          <div className="inline-flex items-center gap-1.5 bg-[#003366]/10 text-[#003366] px-3 py-1 rounded-full text-xs font-semibold mb-4 sm:mb-6 border border-[#003366]/15">
             <Sparkles className="w-3.5 h-3.5" />
             <span>TCS Campus Sports Portal</span>
           </div>
-          <h1 className="font-display text-4xl sm:text-5xl md:text-6xl font-extrabold text-[#003366] tracking-tight leading-none mb-6">
+          <h1 className="font-display text-3xl sm:text-5xl md:text-6xl font-extrabold text-[#003366] tracking-tight leading-tight sm:leading-none mb-4 sm:mb-6 px-1">
             TCS Play-Smart
           </h1>
-          <p className="font-display text-xl sm:text-2xl font-semibold text-slate-700 mb-8 max-w-2xl mx-auto">
+          <p className="font-display text-lg sm:text-2xl font-semibold text-slate-700 mb-6 sm:mb-8 max-w-2xl mx-auto px-1">
             Book Your Game. Stay Active.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -220,7 +255,11 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-3xl mx-auto mb-8">
             <h2 className="font-display text-3xl font-bold text-slate-900 tracking-tight">Sports Facilities Inventory</h2>
-            <p className="text-slate-500 mt-2">State-of-the-art courts and gear setup available daily on the TCS campus.</p>
+            <p className="text-slate-500 mt-2">
+              Courts and gear configured for{' '}
+              <span className="font-semibold text-slate-700">{campusContact.city}</span>
+              {' '}— change campus above to see another location.
+            </p>
           </div>
 
           <div className="max-w-md mx-auto mb-10">
@@ -263,12 +302,12 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-6">
               {Object.entries(sportSummary).map(([sport, count]) => (
-                <div key={sport} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center text-center">
-                  <span className="text-4xl mb-3" role="img" aria-label={sport}>{sportIcons[sport] || '🏆'}</span>
-                  <h4 className="font-display font-bold text-slate-900 text-sm">{sport}</h4>
-                  <p className="text-xs text-slate-400 mt-1 font-mono">{(count as number)} {(count as number) > 1 ? 'Units' : 'Unit'}</p>
+                <div key={sport} className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center text-center">
+                  <span className="text-3xl sm:text-4xl mb-2 sm:mb-3" role="img" aria-label={sport}>{sportIcons[sport] || '🏆'}</span>
+                  <h4 className="font-display font-bold text-slate-900 text-xs sm:text-sm leading-snug">{sport}</h4>
+                  <p className="text-[10px] sm:text-xs text-slate-400 mt-1 font-mono">{(count as number)} {(count as number) > 1 ? 'Units' : 'Unit'}</p>
                 </div>
               ))}
             </div>
@@ -276,27 +315,39 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
         </div>
       </section>
 
-      {/* Contact Section */}
+      {/* Contact Section — follows selected campus */}
       <section id="contact" className="py-16 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="bg-blue-600 rounded-3xl p-8 md:p-12 text-white text-center max-w-4xl mx-auto">
-            <h2 className="font-display text-2xl md:text-3xl font-bold tracking-tight mb-4">Need Help or Have Concerns?</h2>
-            <p className="text-blue-100 text-sm mb-8 max-w-xl mx-auto">
-              Reach out to the TCS Chennai Sports Committee or physical campus helpdesk at Siruseri Tech Park.
-              For other campuses, register with your location — your location admin handles approvals and court setup.
+            <p className="text-[10px] font-bold uppercase tracking-widest text-sky-200 mb-2">
+              {campusContact.location}
             </p>
+            <h2 className="font-display text-2xl md:text-3xl font-bold tracking-tight mb-4">Need Help or Have Concerns?</h2>
+            <p className="text-blue-100 text-sm mb-6 max-w-xl mx-auto">
+              Reach out to the {campusContact.committee} or the physical campus helpdesk at {campusContact.address}.
+              Register with this location so your location admin can approve staff and manage courts.
+            </p>
+            {locationAdminContacts ? (
+              <p className="text-sky-100 text-xs mb-6 max-w-xl mx-auto bg-white/10 border border-white/15 rounded-xl px-3 py-2">
+                {locationAdminContacts}
+              </p>
+            ) : null}
             <div className="flex flex-col md:flex-row items-center justify-center gap-6 md:gap-10 text-sm">
               <div className="flex items-center gap-3">
                 <MapPin className="w-5 h-5 text-sky-300 shrink-0" />
-                <span>Siruseri Campus, TCS Chennai, Tamil Nadu, India</span>
+                <span>{campusContact.address}</span>
               </div>
               <div className="flex items-center gap-3">
                 <Phone className="w-5 h-5 text-sky-300 shrink-0" />
-                <span>+91 44 6616 8888 (Ext. 200)</span>
+                <a href={`tel:${campusContact.phone.replace(/[^\d+]/g, '')}`} className="hover:underline">
+                  {campusContact.phone}
+                </a>
               </div>
               <div className="flex items-center gap-3">
                 <Mail className="w-5 h-5 text-sky-300 shrink-0" />
-                <span>playsmart.support@tcs.com</span>
+                <a href={`mailto:${campusContact.email}`} className="hover:underline break-all">
+                  {campusContact.email}
+                </a>
               </div>
             </div>
           </div>
@@ -306,8 +357,10 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
       {/* Footer */}
       <footer className="bg-slate-900 text-slate-400 py-8 border-t border-slate-800 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-xs">
-          <p>© 2026 TCS Chennai Campus. PlaySmart Sports Scheduling Platform. All rights reserved.</p>
-          <p className="mt-2 text-slate-600">Built using React, Tailwind CSS, and local storage state sync mirroring Supabase Postgres.</p>
+          <p>© 2026 TCS {campusContact.city} Campus. PlaySmart Sports Scheduling Platform. All rights reserved.</p>
+          <p className="mt-2 text-slate-600">
+            Viewing {campusContact.location} · {campusContact.email}
+          </p>
         </div>
       </footer>
     </div>

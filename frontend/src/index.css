@@ -32,3 +32,34 @@
     radial-gradient(ellipse 60% 45% at 90% 90%, rgba(0, 102, 153, 0.1), transparent 50%),
     linear-gradient(180deg, #dce6f0 0%, #eef3f8 55%, #f5f8fb 100%);
 }
+
+/* Responsive shell — prevent horizontal scroll on phones / small laptops */
+html,
+body,
+#root {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+body {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Comfortable tap targets on touch devices */
+@media (pointer: coarse) {
+  button,
+  [role="button"],
+  a,
+  select,
+  summary {
+    min-height: 2.5rem;
+  }
+}
+
+/* Tables / matrices that must scroll sideways on mobile */
+@utility scroll-x-touch {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}

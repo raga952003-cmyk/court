@@ -125,7 +125,7 @@ export default function RegisterPage({ onSuccess, onNavigateBack, onNavigateLogi
   };
 
   return (
-    <div id="register_screen" className="min-h-screen tcs-auth-bg flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+    <div id="register_screen" className="min-h-screen tcs-auth-bg flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <button
           id="register_back_btn"
@@ -134,12 +134,12 @@ export default function RegisterPage({ onSuccess, onNavigateBack, onNavigateLogi
         >
           <ChevronLeft className="w-4 h-4" /> Back to home
         </button>
-        <div className="flex items-center justify-center gap-3 mb-4">
-          <img src="/tcs_logo.png" className="h-9 object-contain bg-white rounded px-1.5 py-0.5 shadow-sm" alt="TCS Logo" />
-          <span className="text-xl font-bold tracking-tight text-[#003366] font-display">TCS Play-Smart</span>
+        <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 mb-4">
+          <img src="/tcs_logo.png" className="h-8 sm:h-9 object-contain bg-white rounded px-1.5 py-0.5 shadow-sm" alt="TCS Logo" />
+          <span className="text-lg sm:text-xl font-bold tracking-tight text-[#003366] font-display">TCS Play-Smart</span>
           <span className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded text-[9px] font-semibold uppercase tracking-wider font-sans">Campus Hub</span>
         </div>
-        <h2 className="text-center text-3xl font-display font-extrabold text-slate-900 tracking-tight">
+        <h2 className="text-center text-2xl sm:text-3xl font-display font-extrabold text-slate-900 tracking-tight px-1">
           {roleTitle}
         </h2>
         <p className="mt-2 text-center text-sm text-slate-500">
@@ -155,7 +155,7 @@ export default function RegisterPage({ onSuccess, onNavigateBack, onNavigateLogi
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-xl">
-        <div className="bg-white py-8 px-6 shadow-sm sm:rounded-2xl border border-slate-200">
+        <div className="bg-white py-6 sm:py-8 px-4 sm:px-6 shadow-sm rounded-2xl border border-slate-200">
           <form className="space-y-5" onSubmit={handleRegister}>
             {error && (
               <div id="register_error_alert" className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3 rounded-xl flex items-start gap-2">

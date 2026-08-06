@@ -80,31 +80,41 @@ export default function SimulatedTimeHeader() {
   const facilitiesOpen = simTime.hour >= 5 && simTime.hour < 20;
 
   return (
-    <div id="simulated_time_widget" className="relative bg-slate-900 text-slate-100 px-6 py-2.5 text-xs flex flex-wrap items-center justify-between gap-3 shadow-sm border-b border-slate-800 z-50">
-      <div className="flex items-center gap-3">
+    <div id="simulated_time_widget" className="relative bg-slate-900 text-slate-100 px-3 sm:px-6 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2 sm:gap-3 shadow-sm border-b border-slate-800 z-50">
+      <div className="flex items-center gap-3 min-w-0">
         <div className="flex items-center gap-2">
-          <Clock className="w-4 h-4 text-sky-400 animate-pulse" />
-          <span className="font-mono text-sky-300 font-semibold tracking-wider">
-            CURRENT TIME: {db.formatSimulatedTime(simTime)}
+          <Clock className="w-4 h-4 text-sky-400 animate-pulse shrink-0" />
+          <span className="font-mono text-sky-300 font-semibold tracking-wider text-[11px] sm:text-xs">
+            <span className="sm:hidden">{db.formatSimulatedTime(simTime)}</span>
+            <span className="hidden sm:inline">CURRENT TIME: {db.formatSimulatedTime(simTime)}</span>
           </span>
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-end">
         {facilitiesOpen && !employeeOpen ? (
-          <div className="flex items-center gap-1.5 bg-amber-950/60 border border-amber-800 text-amber-300 px-2 py-0.5 rounded">
-            <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
-            <span className="font-semibold">Security desk open · Employee self-book from 10 AM</span>
+          <div className="flex items-center gap-1.5 bg-amber-950/60 border border-amber-800 text-amber-300 px-2 py-0.5 rounded max-w-full">
+            <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span className="font-semibold truncate">
+              <span className="sm:hidden">Security desk open</span>
+              <span className="hidden sm:inline">Security desk open · Employee self-book from 10 AM</span>
+            </span>
           </div>
         ) : employeeOpen ? (
           <div className="flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-800 text-emerald-300 px-2 py-0.5 rounded">
-            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="font-semibold">Employee + Security booking open</span>
+            <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span className="font-semibold">
+              <span className="sm:hidden">Booking open</span>
+              <span className="hidden sm:inline">Employee + Security booking open</span>
+            </span>
           </div>
         ) : (
           <div className="flex items-center gap-1.5 bg-rose-950/60 border border-rose-800 text-rose-300 px-2 py-0.5 rounded">
-            <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
-            <span className="font-semibold">Facilities Closed (8 PM - 6 AM)</span>
+            <ShieldAlert className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <span className="font-semibold">
+              <span className="sm:hidden">Closed</span>
+              <span className="hidden sm:inline">Facilities Closed (8 PM - 6 AM)</span>
+            </span>
           </div>
         )}
 

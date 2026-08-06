@@ -608,12 +608,12 @@ RESPONSE GUIDELINES:
   };
 
   return (
-    <div className="fixed bottom-6 right-4 sm:right-6 z-[9999] font-display">
+    <div className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] right-3 sm:right-6 z-[9999] font-display">
       {/* Floating Chat Bubble */}
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
-          className={`flex items-center gap-2 px-4 py-3 rounded-full shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer text-white ${
+          className={`flex items-center gap-2 px-3 sm:px-4 py-2.5 sm:py-3 rounded-full shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer text-white ${
             theme === 'dark' ? 'bg-slate-800 hover:bg-slate-700 shadow-slate-900/40' :
             theme === 'green' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/30' :
             theme === 'purple' ? 'bg-purple-600 hover:bg-purple-700 shadow-purple-600/30' :
@@ -621,14 +621,15 @@ RESPONSE GUIDELINES:
           }`}
         >
           <Bot className="w-5 h-5 animate-pulse" />
-          <span className="text-xs font-bold tracking-wider">PlaySmart AI</span>
+          <span className="text-xs font-bold tracking-wider sm:hidden">AI</span>
+          <span className="text-xs font-bold tracking-wider hidden sm:inline">PlaySmart AI</span>
           <span className="w-2 h-2 rounded-full bg-emerald-450 animate-ping"></span>
         </button>
       )}
 
       {/* Slide-out Chat Window — full-screen sheet on small phones */}
       {isOpen && (
-        <div className={`fixed inset-3 sm:static sm:inset-auto w-auto sm:w-[400px] h-[calc(100dvh-1.5rem)] sm:h-[min(520px,70vh)] rounded-3xl border shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ${
+        <div className={`fixed inset-2 sm:static sm:inset-auto w-auto sm:w-[400px] h-[calc(100dvh-1rem)] sm:h-[min(520px,70vh)] rounded-2xl sm:rounded-3xl border shadow-2xl flex flex-col overflow-hidden transition-all duration-300 ${
           theme === 'dark' ? 'bg-slate-950 border-slate-800 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
         }`}>
           {/* Header */}

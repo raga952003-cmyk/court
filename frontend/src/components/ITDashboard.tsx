@@ -70,40 +70,41 @@ export default function ITDashboard({ user, onLogout, onUpdateUser }: ITDashboar
   return (
     <div className="min-h-screen tcs-campus-bg text-slate-800">
       <nav className="bg-[#003366] text-white shadow-sm">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+        <div className="max-w-5xl mx-auto px-3 sm:px-6 py-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <img
               src="/tcs_logo.png"
-              className="h-8 w-auto object-contain bg-white/95 rounded px-1.5 py-0.5"
+              className="h-7 sm:h-8 w-auto shrink-0 object-contain bg-white/95 rounded px-1.5 py-0.5"
               alt="TCS"
             />
-            <div>
-              <p className="font-display font-bold text-sm tracking-tight">TCS Play-Smart</p>
-              <p className="text-[11px] text-blue-200 font-mono">
-                IT Desk · {user.name} · {user.employeeId}
-                {user.businessUnit ? ` · ${user.businessUnit}` : ''}
+            <div className="min-w-0">
+              <p className="font-display font-bold text-sm tracking-tight truncate">TCS Play-Smart</p>
+              <p className="text-[10px] sm:text-[11px] text-blue-200 font-mono truncate">
+                IT Desk · {user.name}
+                <span className="hidden sm:inline"> · {user.employeeId}{user.businessUnit ? ` · ${user.businessUnit}` : ''}</span>
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <NotificationBell employeeId={user.employeeId} variant="onDark" />
             <button
               type="button"
               onClick={onLogout}
-              className="px-3 py-1.5 text-xs font-bold text-rose-300 hover:text-white hover:bg-rose-600 rounded-lg border border-rose-500/20 cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 text-xs font-bold text-rose-300 hover:text-white hover:bg-rose-600 rounded-lg border border-rose-500/20 cursor-pointer"
             >
-              Sign Out
+              <span className="sm:hidden">Out</span>
+              <span className="hidden sm:inline">Sign Out</span>
             </button>
           </div>
         </div>
       </nav>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-        <div className="flex gap-2 mb-6 border-b border-slate-200">
+      <main className="max-w-5xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
+        <div className="flex gap-1 sm:gap-2 mb-6 border-b border-slate-200 overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveTab('tickets')}
-            className={`pb-2.5 px-3 text-sm font-semibold border-b-2 cursor-pointer transition-colors ${
+            className={`pb-2.5 px-3 text-sm font-semibold border-b-2 cursor-pointer transition-colors whitespace-nowrap ${
               activeTab === 'tickets'
                 ? 'text-[#003366] border-[#003366]'
                 : 'text-slate-500 border-transparent hover:text-slate-800'
@@ -114,7 +115,7 @@ export default function ITDashboard({ user, onLogout, onUpdateUser }: ITDashboar
           <button
             type="button"
             onClick={() => setActiveTab('profile')}
-            className={`pb-2.5 px-3 text-sm font-semibold border-b-2 cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+            className={`pb-2.5 px-3 text-sm font-semibold border-b-2 cursor-pointer transition-colors inline-flex items-center gap-1.5 whitespace-nowrap ${
               activeTab === 'profile'
                 ? 'text-[#003366] border-[#003366]'
                 : 'text-slate-500 border-transparent hover:text-slate-800'
