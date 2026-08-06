@@ -165,6 +165,7 @@ DECLARE
     v_capacity integer;
     v_joined_count integer;
     v_capacities_json jsonb;
+    v_use_sim text;
 BEGIN
     -- 1. Check Facility status
     SELECT * INTO r_facility FROM facilities WHERE facility_id = NEW.facility_id;
@@ -179,10 +180,17 @@ BEGIN
     NEW.sport := r_facility.sport;
     NEW.court_name := r_facility.court_name;
 
-    -- 2. Check booking window
-    SELECT hour INTO sim_hour FROM simulated_time WHERE key = 'current_time';
+    -- 2. Check booking window (Asia/Kolkata wall clock; simulated_time only if use_simulated_time=true)
+    BEGIN
+        SELECT value INTO v_use_sim FROM system_settings WHERE key = 'use_simulated_time';
+    EXCEPTION WHEN OTHERS THEN
+        v_use_sim := NULL;
+    END;
+    IF lower(coalesce(v_use_sim, 'false')) IN ('true', '1', 'yes') THEN
+        SELECT hour INTO sim_hour FROM simulated_time WHERE key = 'current_time';
+    END IF;
     IF sim_hour IS NULL THEN
-        sim_hour := 9; -- Fallback
+        sim_hour := EXTRACT(HOUR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata'))::integer;
     END IF;
     
     SELECT role INTO creator_role FROM users WHERE employee_id = NEW.employee_id;

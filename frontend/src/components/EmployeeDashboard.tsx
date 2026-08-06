@@ -22,7 +22,6 @@ import {
   isDemoSimulatedTimeEnabled,
   isEmployeeOnlineBookingOpen,
   isFacilitiesOpen,
-  isSecurityDeskBookingOpen,
   isSlotPastOrStarted,
   normalizeSlotLabel,
   slotTimeFromHour
@@ -113,11 +112,11 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
   } | null>(null);
 
   useEffect(() => {
-    if (bookingModal) {
-      setInviteRows([{ employeeId: '', name: '' }]);
-      setErrorMsg('');
-    }
-  }, [bookingModal]);
+    if (!bookingModal) return;
+    setInviteRows([{ employeeId: '', name: '' }]);
+    setErrorMsg('');
+    // Reset invite form only when opening a different court/slot — not on every re-render
+  }, [bookingModal?.facility.facilityId, bookingModal?.slot]);
 
   // Keep campus clock ticking independently so past-slot freeze never depends on a failed API refresh
   useEffect(() => {
@@ -153,7 +152,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
       setSlotTimes(slots);
       setSportCapacities(capacities);
       setLocationSports(sports);
-      if (sports.length > 0 && !sports.includes(selectedSport)) {
+      if (sports.length > 0 && !sports.some(s => s.toLowerCase() === selectedSport.toLowerCase())) {
         setSelectedSport(sports[0]);
       }
       setMyInvites(invites);
@@ -208,6 +207,8 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
     window.addEventListener('location_sports_change', handleSportsChange);
 
     const interval = setInterval(() => {
+      // Don't refresh while the booking modal is open — avoids input focus/state jank
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
       refreshData();
     }, 2500);
 
@@ -295,10 +296,37 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
 
   const SPORT_CAPACITIES = sportCapacities;
 
+  const sameSport = (a?: string | null, b?: string | null) =>
+    String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
+  /** Only sports that have courts at this campus — matches admin facility config. */
+  const sportsWithCourts = locationSports.filter(s =>
+    facilities.some(f => sameSport(f.sport, s))
+  );
+  const displaySports =
+    sportsWithCourts.length > 0
+      ? sportsWithCourts
+      : Array.from(
+          new Map(
+            facilities.map(f => [String(f.sport).trim().toLowerCase(), f.sport] as const)
+          ).values()
+        );
+
+  useEffect(() => {
+    if (displaySports.length === 0) return;
+    if (!displaySports.some(s => sameSport(s, selectedSport))) {
+      setSelectedSport(displaySports[0]);
+    }
+  }, [displaySports.join('|'), selectedSport]);
+
   const getCourtCapacity = (facility: Facility) =>
     facility.playerCapacity && facility.playerCapacity > 0
       ? facility.playerCapacity
-      : SPORT_CAPACITIES[facility.sport] || 4;
+      : SPORT_CAPACITIES[facility.sport] ||
+        SPORT_CAPACITIES[
+          Object.keys(SPORT_CAPACITIES).find(k => sameSport(k, facility.sport)) || ''
+        ] ||
+        4;
 
   const sameSlot = (a: string, b: string) => normalizeSlotLabel(a) === normalizeSlotLabel(b);
 
@@ -334,7 +362,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
       return 'booked';
     }
 
-    // Free seat but employee online window is closed (e.g. 5–10 AM desk-only)
+    // Free seat but employee online window is closed (security can still assist 5 AM–8 PM)
     if (!isEmployeeOnlineBookingOpen(simTime)) return 'locked';
 
     return 'available';
@@ -376,12 +404,12 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
 
   // Helper to get booking details for a cell
   const getSlotBooking = (facilityId: string, slot: SlotTime): Booking | undefined => {
-    return bookings.find(b => b.facilityId === facilityId && b.slotTime === slot && b.status !== 'cancelled' && b.employeeId === user.employeeId);
+    return bookings.find(b => b.facilityId === facilityId && sameSlot(b.slotTime, slot) && b.status !== 'cancelled' && b.employeeId === user.employeeId);
   };
 
   // Calculate stats for each sport at the current simulated hour
   const getSportStats = (sport: SportType) => {
-    const sportFacs = facilities.filter(f => f.sport === sport);
+    const sportFacs = facilities.filter(f => sameSport(f.sport, sport));
     const totalCourts = sportFacs.length;
     
     let available = 0;
@@ -512,20 +540,11 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
   );
   const myActiveWaitlist = waitlist.filter(w => w.employeeId === user.employeeId);
 
-  // Quick check-in simulator inside QR Code Modal
-  const simulateQRCheckIn = async (bookingId: string) => {
-    const res = await db.updateBookingStatus(bookingId, 'checked_in', 'SEC202');
-    if (res.success) {
-      setQrModal(null);
-      refreshData();
-      showAppToast('Simulated check-in successful. Enjoy your game!', 'success');
-    } else {
-      showAppToast(res.error || 'Check-in failed.', 'error');
-    }
-  };
+  // Quick check-in is security-only — employees only show the PlayPass at the gate
 
-  const isSecurityBookingOnly = isSecurityDeskBookingOpen(simTime);
   const isOnlineBookingOpen = isEmployeeOnlineBookingOpen(simTime);
+  // Morning / evening: employees cannot self-book, but security desk can assist while facilities are open
+  const isSecurityBookingOnly = isFacilitiesOpen(simTime) && !isOnlineBookingOpen;
 
   return (
     <div id="employee_dashboard" className="min-h-screen tcs-campus-bg text-slate-800 flex flex-col">
@@ -655,7 +674,8 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
             <div>
               <p className="font-bold text-xs uppercase tracking-wider">Direct Online Booking is Locked</p>
               <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
-                Online self-booking is frozen between 5:00 AM and 10:00 AM — use the Security desk for morning bookings. 
+                Online self-booking is frozen right now — self-service is 10:00 AM – 8:00 PM.
+                Visit the Security desk for assisted booking anytime facilities are open (5:00 AM – 8:00 PM). 
                 You can still browse current court grids, but bookings can only be placed on your behalf by physical walk-in at the security gate desk.
               </p>
             </div>
@@ -761,7 +781,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                 </div>
               ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {locationSports.map(sport => {
+                {displaySports.map(sport => {
                   const stats = getSportStats(sport);
                   const icons: Record<string, string> = {
                     'Badminton': '🏸',
@@ -824,13 +844,13 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
 
                 {/* Sport Selector — location-specific categories */}
                 <div className="flex flex-wrap gap-1.5">
-                  {locationSports.map(sport => (
+                  {displaySports.map(sport => (
                     <button
                       key={sport}
                       id={`sport_select_${sport.toLowerCase().replace(/\s+/g, '_')}`}
                       onClick={() => setSelectedSport(sport)}
                       className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                        selectedSport === sport
+                        sameSport(selectedSport, sport)
                           ? 'bg-[#003366] text-white shadow-sm'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
@@ -888,7 +908,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {facilities.filter(f => f.sport === selectedSport).length === 0 && (
+                    {facilities.filter(f => sameSport(f.sport, selectedSport)).length === 0 && (
                       <tr>
                         <td
                           colSpan={slotTimes.length + 1}
@@ -900,7 +920,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                       </tr>
                     )}
                     {facilities
-                      .filter(f => f.sport === selectedSport)
+                      .filter(f => sameSport(f.sport, selectedSport))
                       .map(court => (
                         <tr key={court.facilityId} className="hover:bg-slate-50/50 transition-colors">
                           <td className="sticky left-0 z-10 bg-white py-4 px-4 font-display font-bold text-slate-800 text-sm shadow-[2px_0_6px_-2px_rgba(0,0,0,0.08)]">
@@ -911,7 +931,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                           </td>
                           {slotTimes.map(slot => {
                             const status = getSlotStatus(court.facilityId, slot);
-                            const slotBookings = bookings.filter(b => b.facilityId === court.facilityId && b.slotTime === slot && b.status !== 'cancelled');
+                            const slotBookings = bookings.filter(b => b.facilityId === court.facilityId && sameSlot(b.slotTime, slot) && b.status !== 'cancelled');
                             const capacity = getCourtCapacity(court);
                             const occupied = getOccupiedCount(court.facilityId, slot);
                             const isRegisteredInSlot = slotBookings.some(b => b.employeeId === user.employeeId);
@@ -1451,8 +1471,8 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
 
       {/* Booking Confirmation Dialog Modal */}
       {bookingModal && (() => {
-        const slotBookings = bookings.filter(b => b.facilityId === bookingModal.facility.facilityId && b.slotTime === bookingModal.slot && b.status !== 'cancelled');
-        const slotPending = pendingInvites.filter(i => i.facilityId === bookingModal.facility.facilityId && i.slotTime === bookingModal.slot);
+        const slotBookings = bookings.filter(b => b.facilityId === bookingModal.facility.facilityId && sameSlot(b.slotTime, bookingModal.slot) && b.status !== 'cancelled');
+        const slotPending = pendingInvites.filter(i => i.facilityId === bookingModal.facility.facilityId && sameSlot(i.slotTime, bookingModal.slot));
         const myBooking = slotBookings.find(b => b.employeeId === user.employeeId);
         const isJoined = !!myBooking;
         const capacity = getCourtCapacity(bookingModal.facility);
@@ -1541,9 +1561,9 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                   <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs p-3 rounded-xl flex items-start gap-2 mb-4">
                     <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
                     <div>
-                      <span className="font-bold">Security Booking Window Locked!</span>
+                      <span className="font-bold">Employee online booking closed</span>
                       <p className="mt-0.5 leading-relaxed text-amber-700">
-                        TCS Employee direct online booking is restricted between 5:00 AM – 10:00 AM.
+                        Self-service is available 10:00 AM – 8:00 PM. Ask the Security desk for assisted booking anytime facilities are open (5:00 AM – 8:00 PM).
                       </p>
                     </div>
                   </div>
@@ -1751,7 +1771,7 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
               <p className="text-[10px] text-slate-400 font-mono mt-0.5">{qrModal.courtName} | {qrModal.slotTime}</p>
 
               {(() => {
-                const matchPlayers = bookings.filter(b => b.facilityId === qrModal.facilityId && b.slotTime === qrModal.slotTime && b.status !== 'cancelled');
+                const matchPlayers = bookings.filter(b => b.facilityId === qrModal.facilityId && sameSlot(b.slotTime, qrModal.slotTime) && b.status !== 'cancelled');
                 return (
                   <div className="mt-2.5 p-2.5 bg-slate-50 border border-slate-100 rounded-xl text-[10px] max-w-[240px] mx-auto text-left">
                     <span className="font-bold text-slate-500 block uppercase tracking-wider mb-1 text-center text-[9px]">Players Joined:</span>
@@ -1774,23 +1794,15 @@ export default function EmployeeDashboard({ user, onLogout, onUpdateUser }: Empl
                 </div>
               </div>
 
-              <p className="text-[11px] text-slate-500 max-w-xs mx-auto mb-6 px-2">
-                Present this digital QR ticket at the security gate of {qrModal.courtName} to verify your entry and mark attendance.
+              <p className="text-[11px] text-slate-500 max-w-xs mx-auto mb-4 px-2">
+                Present this digital QR ticket at the security gate of {qrModal.courtName}. Attendance is marked only after Security scans your pass and confirms you are present.
               </p>
 
-              {/* Security desk simulation check in action shortcut */}
-              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-xs">
-                <span className="font-bold text-blue-800 block mb-1">Evaluate Gate Scanner</span>
-                <p className="text-slate-600 leading-relaxed text-[11px]">
-                  Simulate scanning this QR pass at the guard checkpoint to instantly record player attendance.
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-left">
+                <span className="font-bold text-amber-900 block mb-1">Attendance rule</span>
+                <p className="text-amber-800/90 leading-relaxed text-[11px]">
+                  You cannot self-check-in. Security must scan this QR (or enter your Pass ID) and confirm your presence at the gate before status becomes <strong>Checked in</strong>.
                 </p>
-                <button
-                  id="simulate_qr_scanner_btn"
-                  onClick={() => simulateQRCheckIn(qrModal.bookingId)}
-                  className="mt-3 w-full py-2.5 bg-[#003366] hover:bg-[#002244] text-white font-bold text-xs rounded-xl shadow cursor-pointer transition-colors"
-                >
-                  Simulate Guard Scanning Pass
-                </button>
               </div>
               </div>
         </Modal>

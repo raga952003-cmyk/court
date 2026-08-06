@@ -23,12 +23,29 @@ export interface CampusTime {
   minute: number;
 }
 
-/** Normalize slot labels from DB/UI (dashes, spaces, case). */
+/** Normalize slot labels from DB/UI (dashes, spaces, AM/PM case) to a canonical form. */
 export function normalizeSlotLabel(slot: string): string {
-  return String(slot || '')
+  const cleaned = String(slot || '')
     .replace(/[–—−]/g, '-')
     .replace(/\s+/g, ' ')
     .trim();
+  const m = cleaned.match(/^(\d{1,2})\s*-\s*(\d{1,2})\s*(AM|PM)$/i);
+  if (m) {
+    return `${parseInt(m[1], 10)}-${parseInt(m[2], 10)} ${m[3].toUpperCase()}`;
+  }
+  return cleaned;
+}
+
+/** Sort slot labels by start hour (unrecognized labels go last). */
+export function sortSlotLabels(slots: string[]): string[] {
+  return [...slots].sort((a, b) => {
+    const ha = getSlotStartHour(a);
+    const hb = getSlotStartHour(b);
+    if (ha === null && hb === null) return normalizeSlotLabel(a).localeCompare(normalizeSlotLabel(b));
+    if (ha === null) return 1;
+    if (hb === null) return -1;
+    return ha - hb;
+  });
 }
 
 /** Resolve slot start hour (0–23). Null if unrecognized. */
@@ -99,14 +116,17 @@ export function isSlotPastOrStarted(slot: string, time: CampusTime): boolean {
   return nowMinutes >= startMinutes;
 }
 
-/** Employee online self-booking: 10:00–19:59 */
+/** Employee online self-booking: 10:00–19:59 (10 AM – 8 PM) */
 export function isEmployeeOnlineBookingOpen(time: CampusTime): boolean {
   return time.hour >= 10 && time.hour < 20;
 }
 
-/** Security desk assisted booking: 5:00–9:59 */
+/**
+ * Security desk assisted booking: all day while facilities are open (5:00–19:59).
+ * Security may book on behalf of employees at any time in this window — not limited to mornings.
+ */
 export function isSecurityDeskBookingOpen(time: CampusTime): boolean {
-  return time.hour >= 5 && time.hour < 10;
+  return isFacilitiesOpen(time);
 }
 
 /** Facilities operating window: 5:00–19:59 */

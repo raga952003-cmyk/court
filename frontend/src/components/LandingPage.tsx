@@ -188,7 +188,7 @@ export default function LandingPage({ onNavigate, onOpenAdminSetup }: LandingPag
               </div>
               <h3 className="font-display font-semibold text-lg text-slate-900">Reduced Server Peak Load</h3>
               <p className="text-slate-500 text-sm mt-2">
-                By segmenting bookings with the 5:00 AM – 10:00 AM Security Booking Window, we balance query distributions, ensuring 100% app responsiveness.
+                By segmenting employee self-booking (10:00 AM – 8:00 PM) with all-day Security desk assistance (5:00 AM – 8:00 PM), we keep courts reachable for walk-ins and app users alike.
               </p>
             </div>
 

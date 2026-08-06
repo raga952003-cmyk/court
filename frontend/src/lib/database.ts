@@ -26,7 +26,9 @@ import {
   getWallClockIST,
   isEmployeeOnlineBookingOpen,
   isSecurityDeskBookingOpen,
-  isSlotPastOrStarted
+  isSlotPastOrStarted,
+  normalizeSlotLabel,
+  sortSlotLabels
 } from './timeWindows';
 
 function notifyFacilitiesChanged() {
@@ -45,6 +47,42 @@ function notifyUsersChanged() {
     /* ignore quota */
   }
   window.dispatchEvent(new Event('users_change'));
+}
+
+/**
+ * Store in simulated outbox + send via backend SMTP (Brevo/Gmail) when ENABLE_REAL_EMAILS=true.
+ * Never throws — registration/booking must not fail if email is down.
+ */
+async function dispatchEmail(to: string, subject: string, body: string): Promise<void> {
+  const toEmail = String(to || '').trim().toLowerCase();
+  if (!toEmail) return;
+
+  try {
+    await supabase.from('simulated_emails').insert({
+      id: `email_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      to_email: toEmail,
+      subject,
+      body
+    });
+  } catch (e) {
+    console.warn('Failed to store email in outbox:', e);
+  }
+
+  try {
+    await apiFetch('/api/emails/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: toEmail, subject, body })
+    });
+  } catch {
+    // Backend / SMTP optional
+  }
+
+  try {
+    window.dispatchEvent(new Event('simulated_email_sent'));
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Canonical system_settings / localStorage key for a location-scoped setting. */
@@ -144,19 +182,29 @@ if (!supabaseUrl || !supabaseKey) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-    detectSessionInUrl: false
-  },
-  global: {
-    headers: {
-      apikey: supabaseKey,
-      Authorization: `Bearer ${supabaseKey}`
+// Singleton — Vite HMR re-evaluates this module and would otherwise spawn multiple GoTrueClients
+const supabaseGlobal = globalThis as typeof globalThis & {
+  __playsmartSupabase?: ReturnType<typeof createClient>;
+};
+
+export const supabase =
+  supabaseGlobal.__playsmartSupabase ??
+  createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storageKey: 'playsmart-db-client'
+    },
+    global: {
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`
+      }
     }
-  }
-});
+  });
+
+supabaseGlobal.__playsmartSupabase = supabase;
 
 /** Map PostgREST / Supabase errors into actionable UI messages. */
 function throwSupabaseError(error: any, context: string): never {
@@ -401,6 +449,28 @@ export const db = {
       }
 
       notifyUsersChanged();
+
+      const pendingNote =
+        status === 'pending'
+          ? 'Your account is pending admin approval. You will get another email once an admin activates it.'
+          : 'Your account is active. You can log in now with your Employee ID and password.';
+
+      await dispatchEmail(
+        email,
+        'TCS PlaySmart - Account Registered Successfully',
+        `Dear ${data.name},\n\n` +
+          `Your TCS PlaySmart account has been registered successfully.\n\n` +
+          `Account Details:\n` +
+          `- Employee ID: ${data.employee_id}\n` +
+          `- Name: ${data.name}\n` +
+          `- Email: ${data.email}\n` +
+          `- Role: ${data.role}\n` +
+          `- Location: ${data.business_unit}\n\n` +
+          `${pendingNote}\n\n` +
+          `Best Regards,\nTCS PlaySmart Admin Team\n\n` +
+          `---\nThis is an automated message from TCS PlaySmart.`
+      );
+
       return { success: true, user: mapPublicUser(data) };
     } catch (error: any) {
       return { success: false, error: error.message || 'Registration failed.' };
@@ -804,13 +874,14 @@ export const db = {
         .eq('id', userId);
       if (updateError) throw updateError;
 
-      const emailId = `email_${Date.now()}`;
-      await supabase.from('simulated_emails').insert({
-        id: emailId,
-        to_email: user.email,
-        subject: 'TCS PlaySmart - Account Approved! 🎉',
-        body: `Dear ${user.name},\n\nCongratulations! Your TCS PlaySmart ${user.role} account request has been approved and activated.\n\nAdministrator Comments:\n"${comments || 'Welcome to the platform!'}"\n\nYou can now log in to your portal using your credentials.\n\nBest Regards,\nTCS PlaySmart Sports Committee`
-      });
+      const subject = 'TCS PlaySmart - Account Approved! 🎉';
+      const body =
+        `Dear ${user.name},\n\n` +
+        `Congratulations! Your TCS PlaySmart ${user.role} account request has been approved and activated.\n\n` +
+        `Administrator Comments:\n"${comments || 'Welcome to the platform!'}"\n\n` +
+        `You can now log in to your portal using your credentials.\n\n` +
+        `Best Regards,\nTCS PlaySmart Sports Committee`;
+      await dispatchEmail(user.email, subject, body);
       notifyUsersChanged();
       return true;
     } catch {
@@ -833,13 +904,14 @@ export const db = {
         .eq('id', userId);
       if (updateError) throw updateError;
 
-      const emailId = `email_${Date.now()}`;
-      await supabase.from('simulated_emails').insert({
-        id: emailId,
-        to_email: user.email,
-        subject: 'TCS PlaySmart - Account Request Rejected ❌',
-        body: `Dear ${user.name},\n\nYour request for a TCS PlaySmart ${user.role} account has been rejected by the administrator.\n\nAdministrator Rejection Comments/Reason:\n"${comments}"\n\nBest Regards,\nTCS PlaySmart Sports Committee`
-      });
+      await dispatchEmail(
+        user.email,
+        'TCS PlaySmart - Account Request Rejected ❌',
+        `Dear ${user.name},\n\n` +
+          `Your request for a TCS PlaySmart ${user.role} account has been rejected by the administrator.\n\n` +
+          `Administrator Rejection Comments/Reason:\n"${comments}"\n\n` +
+          `Best Regards,\nTCS PlaySmart Sports Committee`
+      );
       notifyUsersChanged();
       return true;
     } catch {
@@ -1095,8 +1167,12 @@ export const db = {
 
   async getSlotOccupancy(facilityId: string, slotTime: SlotTime): Promise<number> {
     const bookings = await this.getBookings();
+    const slotKey = normalizeSlotLabel(slotTime);
     const confirmed = bookings.filter(
-      b => b.facilityId === facilityId && b.slotTime === slotTime && b.status !== 'cancelled'
+      b =>
+        b.facilityId === facilityId &&
+        normalizeSlotLabel(b.slotTime) === slotKey &&
+        b.status !== 'cancelled'
     ).length;
     const pending = await this.getPendingInviteCount(facilityId, slotTime);
     return confirmed + pending;
@@ -1285,13 +1361,13 @@ export const db = {
       if (bookingData.bookingSource === 'online' && !isEmployeeOnlineBookingOpen(campusTime)) {
         return {
           success: false,
-          error: 'Employee online booking is frozen. Self-service is open 10:00 AM – 8:00 PM. Use the security desk 5:00–10:00 AM.'
+          error: 'Employee online booking is frozen. Self-service is open 10:00 AM – 8:00 PM. Ask the security desk for assisted booking anytime facilities are open (5:00 AM – 8:00 PM).'
         };
       }
       if (bookingData.bookingSource === 'security' && !isSecurityDeskBookingOpen(campusTime)) {
         return {
           success: false,
-          error: 'Security desk booking is frozen outside 5:00 AM – 10:00 AM. Employees book online from 10:00 AM.'
+          error: 'Security desk booking is unavailable while campus facilities are closed (open 5:00 AM – 8:00 PM).'
         };
       }
 
@@ -1308,11 +1384,12 @@ export const db = {
 
       // Organizer + invitees must not already hold a seat or pending invite on this slot
       const existingBookings = await this.getBookings();
+      const slotKey = normalizeSlotLabel(bookingData.slotTime);
       const organizerHasBooking = existingBookings.some(
         b =>
           b.employeeId === empId &&
           b.facilityId === bookingData.facilityId &&
-          b.slotTime === bookingData.slotTime &&
+          normalizeSlotLabel(b.slotTime) === slotKey &&
           b.status !== 'cancelled'
       );
       if (organizerHasBooking) {
@@ -1327,7 +1404,7 @@ export const db = {
           b =>
             b.employeeId === inv.employeeId &&
             b.facilityId === bookingData.facilityId &&
-            b.slotTime === bookingData.slotTime &&
+            normalizeSlotLabel(b.slotTime) === slotKey &&
             b.status !== 'cancelled'
         );
         if (hasBooking) {
@@ -1354,7 +1431,7 @@ export const db = {
         facility_id: bookingData.facilityId,
         sport: facility.sport,
         court_name: facility.court_name,
-        slot_time: bookingData.slotTime,
+        slot_time: normalizeSlotLabel(bookingData.slotTime),
         booking_source: bookingData.bookingSource,
         status: 'confirmed'
       }).select().single();
@@ -1362,6 +1439,38 @@ export const db = {
       if (insertError) {
         return { success: false, error: insertError.message };
       }
+
+      // Organizer confirmation (outbox + Brevo/SMTP when ENABLE_REAL_EMAILS=true)
+      const confirmedSlot = normalizeSlotLabel(bookingData.slotTime);
+      try {
+        await supabase.from('notifications').insert({
+          id: `notif_${Date.now()}_book`,
+          employee_id: empId,
+          title: 'Booking Confirmed',
+          message: `Your slot for ${facility.sport} (${facility.court_name}) at ${confirmedSlot} is confirmed.`,
+          type: 'success',
+          read: false
+        });
+      } catch {
+        /* non-fatal */
+      }
+
+      await dispatchEmail(
+        creator.email,
+        `TCS PlaySmart - Slot Booking Confirmed [${bookingId}]`,
+        `Dear ${creator.name},\n\n` +
+          `Your sports booking on PlaySmart has been confirmed.\n\n` +
+          `Booking Details:\n` +
+          `- Booking ID: ${bookingId}\n` +
+          `- Sport: ${facility.sport}\n` +
+          `- Court / Board: ${facility.court_name}\n` +
+          `- Time Slot: ${confirmedSlot}\n` +
+          `- Channel: ${bookingData.bookingSource === 'security' ? 'Security desk' : 'Online'} booking\n` +
+          `- Location: ${facilityLoc}\n\n` +
+          `Present your QR PlayPass at the court check-in gate.\n\n` +
+          `Best Regards,\nTCS PlaySmart Admin Team\n\n` +
+          `---\nThis is an automated message from TCS PlaySmart.`
+      );
 
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS).toISOString();
       let invitesSent = 0;
@@ -1378,7 +1487,7 @@ export const db = {
           facility_id: bookingData.facilityId,
           sport: facility.sport,
           court_name: facility.court_name,
-          slot_time: bookingData.slotTime,
+          slot_time: confirmedSlot,
           status: 'pending',
           expires_at: expiresAt
         });
@@ -1397,45 +1506,26 @@ export const db = {
           id: `notif_${Date.now()}_${i}`,
           employee_id: inv.employeeId,
           title: 'Match Invite — Accept within 5 minutes',
-          message: `${creator.name} (${empId}) invited you to ${facility.sport} (${facility.court_name}) at ${bookingData.slotTime}. Accept within 5 minutes or the invite expires.`,
+          message: `${creator.name} (${empId}) invited you to ${facility.sport} (${facility.court_name}) at ${confirmedSlot}. Accept within 5 minutes or the invite expires.`,
           type: 'warning',
           read: false
         });
 
-        const emailBody =
+        await dispatchEmail(
+          inv.email,
+          `TCS PlaySmart - Match Invite [${facility.sport} ${confirmedSlot}]`,
           `Dear ${inv.name},\n\n` +
-          `${creator.name} (${empId}) invited you to a PlaySmart slot.\n\n` +
-          `Details:\n` +
-          `- Sport: ${facility.sport}\n` +
-          `- Court: ${facility.court_name}\n` +
-          `- Slot: ${bookingData.slotTime}\n` +
-          `- Expires in: 5 minutes\n\n` +
-          `Please log in to PlaySmart and Accept or Reject this invite. If you do not respond in 5 minutes, the invite expires and you cannot participate.\n\n` +
-          `Best Regards,\nTCS PlaySmart`;
-
-        const subject = `TCS PlaySmart - Match Invite [${facility.sport} ${bookingData.slotTime}]`;
-        await supabase.from('simulated_emails').insert({
-          id: `email_${Date.now()}_inv_${i}`,
-          to_email: inv.email,
-          subject,
-          body: emailBody
-        });
-
-        try {
-          await apiFetch('/api/emails/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ to: inv.email, subject, body: emailBody })
-          });
-        } catch {
-          // real email optional
-        }
+            `${creator.name} (${empId}) invited you to a PlaySmart slot.\n\n` +
+            `Details:\n` +
+            `- Sport: ${facility.sport}\n` +
+            `- Court: ${facility.court_name}\n` +
+            `- Slot: ${confirmedSlot}\n` +
+            `- Expires in: 5 minutes\n\n` +
+            `Please log in to PlaySmart and Accept or Reject this invite. If you do not respond in 5 minutes, the invite expires and you cannot participate.\n\n` +
+            `Best Regards,\nTCS PlaySmart`
+        );
 
         invitesSent++;
-      }
-
-      if (invitesSent > 0) {
-        window.dispatchEvent(new Event('simulated_email_sent'));
       }
 
       return {
@@ -1616,6 +1706,32 @@ export const db = {
 
   async updateBookingStatus(bookingId: string, status: BookingStatus, verifiedBy?: string): Promise<{ success: boolean; error?: string }> {
     try {
+      // Attendance (checked_in) only after Security/Admin verifies the employee is present at the gate
+      if (status === 'checked_in') {
+        const officerId = (verifiedBy || '').trim().toUpperCase();
+        if (!officerId) {
+          return {
+            success: false,
+            error: 'Attendance can only be marked by Security after verifying the employee is present.'
+          };
+        }
+        const { data: officer, error: officerErr } = await supabase
+          .from('users')
+          .select('employee_id, role, status, approved')
+          .eq('employee_id', officerId)
+          .maybeSingle();
+        if (officerErr) throw officerErr;
+        if (!officer || (officer.role !== 'security' && officer.role !== 'admin')) {
+          return {
+            success: false,
+            error: 'Only Security (or Admin) can confirm attendance at the gate.'
+          };
+        }
+        if (officer.status === 'pending' || officer.approved === false || officer.status === 'rejected') {
+          return { success: false, error: 'Your Security account is not approved to mark attendance.' };
+        }
+      }
+
       const { error } = await supabase
         .from('bookings')
         .update({ status })
@@ -1856,6 +1972,22 @@ export const db = {
     ];
   },
 
+  /** Canonical "6-7 AM" style label + de-dupe + chronological order. */
+  normalizeSlotTimesList(slots: unknown): SlotTime[] {
+    if (!Array.isArray(slots)) return [];
+    const seen = new Set<string>();
+    const cleaned: string[] = [];
+    for (const raw of slots) {
+      const label = normalizeSlotLabel(String(raw || ''));
+      if (!label) continue;
+      const key = label.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cleaned.push(label);
+    }
+    return sortSlotLabels(cleaned) as SlotTime[];
+  },
+
   async getSlotTimes(location?: string): Promise<SlotTime[]> {
     const defaultSlots = this.defaultSlotTimes();
     const loc = normalizeLocation(location);
@@ -1870,9 +2002,9 @@ export const db = {
         .maybeSingle();
       if (error) throw error;
       if (data?.value) {
-        const slots = JSON.parse(data.value);
+        const slots = this.normalizeSlotTimesList(JSON.parse(data.value));
         localStorage.setItem(cacheKey, JSON.stringify(slots));
-        return slots;
+        return slots.length > 0 ? slots : defaultSlots;
       }
       // Legacy global key only for default campus (do not leak Chennai hours to other sites)
       if (loc && sameLocation(loc, DEFAULT_TCS_LOCATION)) {
@@ -1882,8 +2014,11 @@ export const db = {
           .eq('key', 'slot_times')
           .maybeSingle();
         if (legacy.data?.value) {
-          const slots = JSON.parse(legacy.data.value);
-          return slots;
+          const slots = this.normalizeSlotTimesList(JSON.parse(legacy.data.value));
+          if (slots.length > 0) {
+            localStorage.setItem(cacheKey, JSON.stringify(slots));
+            return slots;
+          }
         }
       }
     } catch (e) {
@@ -1892,7 +2027,8 @@ export const db = {
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       try {
-        return JSON.parse(cached);
+        const slots = this.normalizeSlotTimesList(JSON.parse(cached));
+        if (slots.length > 0) return slots;
       } catch {
         /* ignore */
       }
@@ -1903,13 +2039,17 @@ export const db = {
   async saveSlotTimes(slots: string[], location?: string): Promise<void> {
     const loc = normalizeLocation(location);
     if (!loc) throw new Error('Location is required to save slot times.');
+    const normalized = this.normalizeSlotTimesList(slots);
+    if (normalized.length === 0) {
+      throw new Error('At least one time slot is required.');
+    }
     const cacheKey = `playsmart_slot_times::${loc}`;
     const dbKey = locationSettingKey('slot_times', loc);
-    localStorage.setItem(cacheKey, JSON.stringify(slots));
+    localStorage.setItem(cacheKey, JSON.stringify(normalized));
     try {
       const { error } = await supabase
         .from('system_settings')
-        .upsert({ key: dbKey, value: JSON.stringify(slots) });
+        .upsert({ key: dbKey, value: JSON.stringify(normalized) });
       if (error) throw error;
     } catch (e) {
       console.warn('Failed to save slot times to database.', e);
@@ -1925,6 +2065,11 @@ export const db = {
   /**
    * Sport categories available at a location (editable by that location's admin).
    * Stored in system_settings as location_sports::<Location>.
+   *
+   * Rules:
+   * - If admin saved a list → use it, and always union sports that already have courts
+   * - Else if courts exist → derive sports from those courts only (do NOT dump all defaults)
+   * - Else (empty campus) → return defaults as a starter catalog for the admin UI
    */
   async getLocationSports(location?: string): Promise<SportType[]> {
     const loc = normalizeLocation(location);
@@ -1954,7 +2099,9 @@ export const db = {
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed)) stored = parsed;
+          if (Array.isArray(parsed)) {
+            stored = parsed.map((s: unknown) => this.normalizeSportName(String(s))).filter(Boolean);
+          }
         } catch {
           /* ignore */
         }
@@ -1965,20 +2112,35 @@ export const db = {
     let fromFacilities: string[] = [];
     try {
       const facs = await this.getFacilities(loc);
-      fromFacilities = Array.from(
-        new Set<string>(facs.map(f => String(f.sport || '')).filter(s => s.length > 0))
-      );
+      const seen = new Set<string>();
+      for (const f of facs) {
+        const name = this.normalizeSportName(String(f.sport || ''));
+        if (!name) continue;
+        const key = name.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        fromFacilities.push(name);
+      }
     } catch {
       /* ignore */
     }
 
-    const base = stored && stored.length > 0 ? stored : defaults;
-    const merged = [...base];
-    for (const s of fromFacilities) {
-      if (!merged.some(x => x.toLowerCase() === s.toLowerCase())) {
-        merged.push(s);
+    let merged: string[];
+    if (stored && stored.length > 0) {
+      merged = [...stored];
+      for (const s of fromFacilities) {
+        if (!merged.some(x => x.toLowerCase() === s.toLowerCase())) {
+          merged.push(s);
+        }
       }
+    } else if (fromFacilities.length > 0) {
+      // Location has courts but no saved sports catalog yet — show only real sports
+      merged = fromFacilities;
+    } else {
+      // Brand-new location: starter list for admin to customize
+      merged = defaults;
     }
+
     localStorage.setItem(cacheKey, JSON.stringify(merged));
     return merged;
   },

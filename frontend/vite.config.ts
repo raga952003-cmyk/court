@@ -9,6 +9,8 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        // bcryptjs imports Node "crypto"; in the browser it uses Web Crypto instead
+        crypto: path.resolve(__dirname, 'src/shims/empty-crypto.ts'),
       },
     },
     build: {

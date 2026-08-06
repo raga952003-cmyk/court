@@ -76,8 +76,8 @@ export default function SimulatedTimeHeader() {
     setShowToast(false);
   };
 
-  const isSecurityOnly = simTime.hour >= 5 && simTime.hour < 10;
-  const isOperatingHours = simTime.hour >= 6 && simTime.hour < 20;
+  const employeeOpen = simTime.hour >= 10 && simTime.hour < 20;
+  const facilitiesOpen = simTime.hour >= 5 && simTime.hour < 20;
 
   return (
     <div id="simulated_time_widget" className="relative bg-slate-900 text-slate-100 px-6 py-2.5 text-xs flex flex-wrap items-center justify-between gap-3 shadow-sm border-b border-slate-800 z-50">
@@ -91,15 +91,15 @@ export default function SimulatedTimeHeader() {
       </div>
 
       <div className="flex items-center gap-3">
-        {isSecurityOnly ? (
+        {facilitiesOpen && !employeeOpen ? (
           <div className="flex items-center gap-1.5 bg-amber-950/60 border border-amber-800 text-amber-300 px-2 py-0.5 rounded">
             <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
-            <span className="font-semibold">Security Only (5 AM - 10 AM)</span>
+            <span className="font-semibold">Security desk open · Employee self-book from 10 AM</span>
           </div>
-        ) : isOperatingHours ? (
+        ) : employeeOpen ? (
           <div className="flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-800 text-emerald-300 px-2 py-0.5 rounded">
             <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="font-semibold">Employee Booking Open</span>
+            <span className="font-semibold">Employee + Security booking open</span>
           </div>
         ) : (
           <div className="flex items-center gap-1.5 bg-rose-950/60 border border-rose-800 text-rose-300 px-2 py-0.5 rounded">
@@ -140,9 +140,9 @@ export default function SimulatedTimeHeader() {
         <div id="policy_info_drawer" className="w-full bg-slate-800 p-3 mt-2 rounded border border-slate-700 text-slate-300 leading-relaxed text-xs">
           <p className="font-semibold text-white mb-1">PlaySmart TCS Booking Rules & Policy Windows:</p>
           <ul className="list-disc list-inside space-y-1">
-            <li><strong className="text-amber-400">Security Booking Window (5:00 AM – 10:00 AM)</strong>: Only security staff can make bookings. Employees must enter both Employee ID and Email ID. All indirect bookings trigger confirmation emails.</li>
-            <li><strong className="text-emerald-400">Employee Self Booking (10:00 AM – 8:00 PM)</strong>: Employees can book any remaining slots directly, verifying their details. All direct bookings trigger confirmation emails.</li>
-            <li><strong className="text-rose-400">Operating Hour Lockouts</strong>: Security bookings are frozen outside 5:00 AM – 10:00 AM, and employee bookings are frozen outside 10:00 AM – 8:00 PM.</li>
+            <li><strong className="text-amber-400">Security Desk (5:00 AM – 8:00 PM)</strong>: Security can book any open slot for employees all day while facilities are open.</li>
+            <li><strong className="text-emerald-400">Employee Self Booking (10:00 AM – 8:00 PM)</strong>: Employees can book remaining slots directly online.</li>
+            <li><strong className="text-rose-400">Operating Hour Lockouts</strong>: Facilities closed 8:00 PM – 5:00 AM. Employee self-booking is frozen outside 10:00 AM – 8:00 PM (security can still assist).</li>
             <li><strong className="text-sky-400">Real-Time Clock</strong>: The system now uses your actual current time for booking windows and validation.</li>
           </ul>
         </div>

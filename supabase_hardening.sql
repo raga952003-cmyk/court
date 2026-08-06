@@ -31,6 +31,7 @@ DECLARE
     v_joined_count integer;
     v_pending_invites integer;
     v_capacities_json jsonb;
+    v_use_sim text;
 BEGIN
     PERFORM expire_stale_booking_invites();
 
@@ -45,7 +46,17 @@ BEGIN
     NEW.sport := r_facility.sport;
     NEW.court_name := r_facility.court_name;
 
-    SELECT hour INTO sim_hour FROM simulated_time WHERE key = 'current_time';
+    -- Campus clock: real IST unless system_settings.use_simulated_time = 'true'
+    BEGIN
+        SELECT value INTO v_use_sim FROM system_settings WHERE key = 'use_simulated_time';
+    EXCEPTION WHEN OTHERS THEN
+        v_use_sim := NULL;
+    END;
+
+    IF lower(coalesce(v_use_sim, 'false')) IN ('true', '1', 'yes') THEN
+        SELECT hour INTO sim_hour FROM simulated_time WHERE key = 'current_time';
+    END IF;
+
     IF sim_hour IS NULL THEN
         sim_hour := EXTRACT(HOUR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata'))::integer;
     END IF;
@@ -55,9 +66,17 @@ BEGIN
         creator_role := 'employee';
     END IF;
 
-    IF creator_role != 'admin' AND NEW.booking_source = 'online' THEN
-        IF sim_hour < 10 OR sim_hour >= 20 THEN
-            RAISE EXCEPTION 'Online booking is closed. Employee Booking Window is active from 10:00 AM to 8:00 PM.';
+    IF creator_role != 'admin' THEN
+        IF NEW.booking_source = 'online' THEN
+            -- Employees: 10:00 AM – 8:00 PM only
+            IF sim_hour < 10 OR sim_hour >= 20 THEN
+                RAISE EXCEPTION 'Online booking is closed. Employee Booking Window is active from 10:00 AM to 8:00 PM.';
+            END IF;
+        ELSIF NEW.booking_source = 'security' THEN
+            -- Security: all day while facilities are open (5:00 AM – 8:00 PM)
+            IF sim_hour < 5 OR sim_hour >= 20 THEN
+                RAISE EXCEPTION 'Security desk booking is unavailable while campus facilities are closed (open 5:00 AM – 8:00 PM).';
+            END IF;
         END IF;
     END IF;
 

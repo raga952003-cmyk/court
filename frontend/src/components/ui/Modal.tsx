@@ -21,25 +21,34 @@ export default function Modal({
   closeOnBackdrop = true
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
+  // Only run when open toggles — do NOT depend on onClose identity (inline lambdas
+  // change every parent render and were stealing focus from invite inputs ~1–2s).
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') onCloseRef.current();
     };
     document.addEventListener('keydown', onKey);
-    // Focus first focusable or panel
+
     const t = window.setTimeout(() => {
+      const active = document.activeElement;
+      if (panelRef.current && active && panelRef.current.contains(active)) {
+        return; // user already focused an input — don't steal it
+      }
       const el = panelRef.current?.querySelector<HTMLElement>(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
       );
       (el || panelRef.current)?.focus();
     }, 0);
+
     return () => {
       document.removeEventListener('keydown', onKey);
       window.clearTimeout(t);
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

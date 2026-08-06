@@ -21,7 +21,8 @@ import {
   getWallClockIST,
   isDemoSimulatedTimeEnabled,
   isSecurityDeskBookingOpen,
-  isSlotPastOrStarted
+  isSlotPastOrStarted,
+  normalizeSlotLabel
 } from '../lib/timeWindows';
 
 type PortalTheme = 'blue' | 'dark';
@@ -61,11 +62,17 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
   const [bookingError, setBookingError] = useState('');
   const [bookingSuccessMessage, setBookingSuccessMessage] = useState('');
   const [slotTimes, setSlotTimes] = useState<SlotTime[]>(() => {
-    const cached = localStorage.getItem('playsmart_slot_times');
+    const loc = normalizeLocation(user.businessUnit) || 'Chennai, India';
+    const cached =
+      localStorage.getItem(`playsmart_slot_times::${loc}`) ||
+      (loc === 'Chennai, India' ? localStorage.getItem('playsmart_slot_times') : null);
     return cached ? JSON.parse(cached) : SLOT_TIMES;
   });
   const [sportCapacities, setSportCapacities] = useState<Record<string, number>>(() => {
-    const cached = localStorage.getItem('playsmart_sport_capacities');
+    const loc = normalizeLocation(user.businessUnit) || 'Chennai, India';
+    const cached =
+      localStorage.getItem(`playsmart_sport_capacities::${loc}`) ||
+      (loc === 'Chennai, India' ? localStorage.getItem('playsmart_sport_capacities') : null);
     return cached ? JSON.parse(cached) : {
       'Badminton': 4,
       'Carrom': 4,
@@ -129,8 +136,10 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
       setSportCapacities(capacities);
       setLocationSports(sports);
       if (sports.length > 0) {
-        if (!sports.includes(bookingSport)) setBookingSport(sports[0]);
-        if (!sports.includes(selectedAvailableSport)) setSelectedAvailableSport(sports[0]);
+        if (!sports.some(s => s.toLowerCase() === bookingSport.toLowerCase())) setBookingSport(sports[0]);
+        if (!sports.some(s => s.toLowerCase() === selectedAvailableSport.toLowerCase())) {
+          setSelectedAvailableSport(sports[0]);
+        }
       }
       if (isDemoSimulatedTimeEnabled()) {
         setSimTime(await db.getSimulatedTime());
@@ -205,13 +214,32 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
 
   // Update default facility option when sport changes
   useEffect(() => {
-    const sportFacs = facilities.filter(f => f.sport === bookingSport && f.status === 'active');
+    const sportFacs = facilities.filter(
+      f => f.sport.toLowerCase() === bookingSport.toLowerCase() && f.status === 'active'
+    );
     if (sportFacs.length > 0) {
       setBookingFacilityId(sportFacs[0].facilityId);
     } else {
       setBookingFacilityId('');
     }
   }, [bookingSport, facilities]);
+
+  const sameSport = (a?: string | null, b?: string | null) =>
+    String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  const sameSlot = (a: string, b: string) => normalizeSlotLabel(a) === normalizeSlotLabel(b);
+
+  /** Sports that have courts at this campus (availability + booking dropdowns). */
+  const sportsWithCourts = locationSports.filter(s =>
+    facilities.some(f => sameSport(f.sport, s))
+  );
+  const displaySports =
+    sportsWithCourts.length > 0
+      ? sportsWithCourts
+      : Array.from(
+          new Map(
+            facilities.map(f => [String(f.sport).trim().toLowerCase(), f.sport] as const)
+          ).values()
+        );
 
   // Escape closes overlays (scanner / ticket / settings)
   useEffect(() => {
@@ -269,7 +297,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
     }
 
     if (!isSecurityDeskBookingOpen(simTime)) {
-      setBookingError('Security desk booking is frozen outside 5:00 AM – 10:00 AM.');
+        setBookingError('Security desk booking is unavailable while campus facilities are closed (open 5:00 AM – 8:00 PM).');
       return;
     }
 
@@ -313,7 +341,14 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
     }
   };
 
-  // QR Check-in Simulator
+  // Look up pass by QR / PIN — do NOT mark attendance until officer confirms presence
+  const openAttendanceConfirm = (booking: Booking) => {
+    setScannedBooking(booking);
+    setIsScanning(true);
+    setScannerError('');
+    setScannerSuccess('');
+  };
+
   const handleScannerCheckIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setScannerError('');
@@ -325,9 +360,15 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
       return;
     }
 
-    const booking = bookings.find(b => b.bookingId === trimmedPassId);
+    // Accept raw booking id, or text copied from a phone camera QR scan
+    const resolvedPassId =
+      trimmedPassId.match(/\b(b_[a-zA-Z0-9]+)\b/i)?.[1] ||
+      trimmedPassId.replace(/^PASS[_-]?ID[:\s]*/i, '').trim();
+    const booking = bookings.find(
+      b => b.bookingId === resolvedPassId || b.bookingId.toLowerCase() === resolvedPassId.toLowerCase()
+    );
     if (!booking) {
-      setScannerError(`No active reservation matches Pass ID "${trimmedPassId}".`);
+      setScannerError(`No active reservation matches Pass ID "${resolvedPassId}".`);
       return;
     }
 
@@ -341,32 +382,28 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
       return;
     }
 
-    const res = await db.updateBookingStatus(booking.bookingId, 'checked_in', user.employeeId);
-    if (res.success) {
-      setScannerSuccess(`Verification successful! Access granted for ${booking.employeeName} (${booking.sport} - ${booking.courtName}).`);
-      setScannerPassId('');
-      refreshData();
-    } else {
-      setScannerError(res.error || 'Failed to complete check-in.');
-    }
+    // Show employee details — attendance only after "Confirm employee present"
+    setScannerPassId('');
+    openAttendanceConfirm(booking);
   };
 
   const handleConfirmValidation = async (bookingId: string) => {
     const res = await db.updateBookingStatus(bookingId, 'checked_in', user.employeeId);
     if (res.success) {
-      setScannerSuccess(`Gate Access Approved! Attendance successfully logged for ${scannedBooking?.employeeName}.`);
+      setScannerSuccess(
+        `Attendance confirmed. ${scannedBooking?.employeeName || 'Employee'} is present at the gate.`
+      );
       setScannedBooking(null);
       setIsScanning(false);
       refreshData();
+      showAppToast('Attendance logged — employee present.', 'success');
     } else {
       setScannerError(res.error || 'Failed to complete attendance validation.');
     }
   };
 
   const handleScanBooking = (booking: Booking) => {
-    setScannedBooking(booking);
-    setScannerError('');
-    setScannerSuccess('');
+    openAttendanceConfirm(booking);
   };
 
   const getCurrentSlotTime = (): SlotTime | 'none' => {
@@ -550,24 +587,14 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Dynamic Warning Banners (Section 3.1 Banners) */}
-        {simTime.hour >= 5 && simTime.hour < 10 ? (
+        {isSecurityBookingWindow ? (
           <div className="bg-emerald-50 border border-emerald-150 text-emerald-800 p-4 rounded-2xl mb-8 flex items-start gap-3 shadow-sm animate-fade-in">
             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
             <div>
               <p className="font-bold text-xs uppercase tracking-wider">Security Desk Booking Active</p>
               <p className="text-xs text-emerald-700 mt-0.5 leading-relaxed">
-                The Security Assisted booking window is open. You can create walk-in reservations on behalf of campus employees using their Employee ID and Email Address.
-              </p>
-            </div>
-          </div>
-        ) : simTime.hour >= 10 && simTime.hour < 20 ? (
-          <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl mb-8 flex items-start gap-3 shadow-sm animate-fade-in">
-            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-bold text-xs uppercase tracking-wider">Security Desk Booking Frozen</p>
-              <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
-                Security-assisted bookings are frozen from 10:00 AM to 8:00 PM. Employees can book remaining slots directly online. 
-                Use this dashboard only to view slots availability grid, guide employee queries, and scan QR PlayPasses at checkpoints.
+                You can create walk-in reservations all day while facilities are open (5:00 AM – 8:00 PM).
+                Employees may also self-book online from 10:00 AM – 8:00 PM.
               </p>
             </div>
           </div>
@@ -578,7 +605,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
               <p className="font-bold text-xs uppercase tracking-wider">Campus Facilities Closed</p>
               <p className="text-xs text-rose-700 mt-0.5 leading-relaxed">
                 {user.businessUnit || 'TCS Campus'} sports facilities are closed (8:00 PM to 5:00 AM).
-                Bookings are locked. TCS Chennai Campus reference hours: same overnight window.
+                Bookings are locked overnight.
               </p>
             </div>
           </div>
@@ -662,16 +689,16 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                     id="sec_scan_submit_btn"
                     className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl cursor-pointer shadow-sm transition-all text-center"
                   >
-                    Check In
+                    Verify Pass
                   </button>
                 </form>
               </div>
 
               {/* Quick simulator helper */}
               <div className="mt-4 bg-slate-50 border border-slate-200 p-3 rounded-xl text-[11px] text-slate-500 leading-relaxed">
-                <span className="font-semibold block text-slate-700">QR Gate-Pass Instructions</span>
+                <span className="font-semibold block text-slate-700">Attendance at the gate</span>
                 <p className="mt-0.5">
-                  Clicking <strong>Trigger Scanner State</strong> starts our visual QR scanner visor. Alternatively, you can click <strong>View Pass QR</strong> next to any booking to generate its playpass on demand!
+                  Scan the employee QR or enter their Pass ID, review their details, then tap <strong>Confirm employee present</strong>. Attendance is marked only after that confirmation.
                 </p>
               </div>
             </div>
@@ -688,13 +715,13 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                     <div>
                       <h3 className="font-display font-bold text-slate-900 text-base">Desk Booking: FROZEN</h3>
                       <span className="text-[10px] bg-rose-50 text-rose-700 font-mono font-bold px-2 py-0.5 rounded-full border border-rose-100">
-                        Locked (10:00 AM – 5:00 AM)
+                        Locked (facilities closed 8:00 PM – 5:00 AM)
                       </span>
                     </div>
                   </div>
 
                   <p className="text-xs text-slate-500 leading-relaxed">
-                    The Security Assisted Booking system is frozen. Only direct employee online bookings are permitted between 10:00 AM and 8:00 PM. Currently, you can only browse <strong>available slots</strong> to assist querying employees.
+                    Campus facilities are closed overnight. You can still browse availability below. Assisted booking reopens at 5:00 AM.
                   </p>
 
                   <div className="border-t border-slate-100 pt-4">
@@ -707,18 +734,23 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                       onChange={(e) => setSelectedAvailableSport(e.target.value as SportType)}
                       className="block w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 mb-4 cursor-pointer"
                     >
-                      {locationSports.map(s => (
+                      {displaySports.map(s => (
                         <option key={s} value={s}>{s}</option>
                       ))}
                     </select>
 
                     <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
                       {facilities
-                        .filter(f => f.sport === selectedAvailableSport && f.status === 'active')
+                        .filter(f => sameSport(f.sport, selectedAvailableSport) && f.status === 'active')
                         .map(fac => {
                           const openSlots = slotTimes.filter(st => {
                             if (isSlotPastOrStarted(st, simTime)) return false;
-                            return !bookings.some(b => b.facilityId === fac.facilityId && b.slotTime === st && b.status !== 'cancelled');
+                            return !bookings.some(
+                              b =>
+                                b.facilityId === fac.facilityId &&
+                                sameSlot(b.slotTime, st) &&
+                                b.status !== 'cancelled'
+                            );
                           });
 
                           return (
@@ -759,13 +791,13 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                     <div>
                       <h3 className="font-display font-bold text-slate-900 text-base">Desk Assisted Booking</h3>
                       <span className="text-[10px] bg-emerald-50 text-emerald-700 font-mono font-bold px-2 py-0.5 rounded-full border border-emerald-100">
-                        Active (5:00 AM – 10:00 AM)
+                        Active all day (5:00 AM – 8:00 PM)
                       </span>
                     </div>
                   </div>
 
                   <p className="text-xs text-slate-500 mb-4">
-                    Security personnel are authorized to book slots for employees with a valid <strong>Employee ID</strong> and <strong>Email ID</strong>.
+                    Security can book any open slot for employees all day while facilities are open. Employees may also self-book online from <strong>10:00 AM – 8:00 PM</strong>.
                   </p>
 
                   <form onSubmit={handleCreateAssistedBooking} className="space-y-4">
@@ -823,7 +855,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                           onChange={(e) => setBookingSport(e.target.value as SportType)}
                           className="mt-1 block w-full px-2 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
                         >
-                          {locationSports.map(s => (
+                          {displaySports.map(s => (
                             <option key={s} value={s}>{s}</option>
                           ))}
                         </select>
@@ -840,7 +872,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                           className="mt-1 block w-full px-2 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
                         >
                           {facilities
-                            .filter(f => f.sport === bookingSport && f.status === 'active')
+                            .filter(f => sameSport(f.sport, bookingSport) && f.status === 'active')
                             .map(f => (
                               <option key={f.facilityId} value={f.facilityId}>{f.courtName}</option>
                             ))}
@@ -1074,10 +1106,10 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                           <>
                             <button
                               id={`sec_checkin_btn_${b.bookingId}`}
-                              onClick={() => handleStatusUpdate(b.bookingId, 'checked_in')}
+                              onClick={() => openAttendanceConfirm(b)}
                               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg cursor-pointer flex items-center gap-1 text-[10px]"
                             >
-                              <UserCheck className="w-3.5 h-3.5" /> Check In
+                              <UserCheck className="w-3.5 h-3.5" /> Verify & Check In
                             </button>
                             <button
                               id={`sec_generate_qr_btn_${b.bookingId}`}
@@ -1423,7 +1455,7 @@ export default function SecurityDashboard({ user, onLogout, onUpdateUser }: Secu
                           : 'bg-emerald-400 hover:bg-emerald-500 shadow-md shadow-emerald-500/20'
                       }`}
                     >
-                      Confirm & Log Attendance
+                      Confirm employee present
                     </button>
                   </div>
                 </div>

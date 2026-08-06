@@ -1,4 +1,4 @@
-import bcrypt from 'bcryptjs';
+import { compare, hash } from 'bcryptjs';
 
 const ROUNDS = 10;
 
@@ -7,14 +7,14 @@ export function isPasswordHash(value: string | null | undefined): boolean {
 }
 
 export async function hashPassword(plain: string): Promise<string> {
-  return bcrypt.hash(plain, ROUNDS);
+  return hash(plain, ROUNDS);
 }
 
 /** Supports bcrypt hashes and legacy plaintext (upgrades on next change/login). */
 export async function verifyPassword(plain: string, stored: string | null | undefined): Promise<boolean> {
   if (!stored) return false;
   if (isPasswordHash(stored)) {
-    return bcrypt.compare(plain, stored);
+    return compare(plain, stored);
   }
   return plain === stored;
 }

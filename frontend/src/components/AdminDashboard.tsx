@@ -8,6 +8,7 @@ import { db } from '../lib/database';
 import { User, Booking, Facility, SportType, SlotTime, WaitlistEntry } from '../types';
 import { DEFAULT_SPORTS, SLOT_TIMES } from '../data/initialData';
 import { normalizeLocation, sameLocation } from '../data/tcsLocations';
+import { normalizeSlotLabel } from '../lib/timeWindows';
 import { 
   Users, Calendar, Activity, ShieldAlert, Percent, Settings, Wrench, 
   BarChart as BarIcon, ShieldCheck, RefreshCw, UserPlus, ToggleLeft, ToggleRight, 
@@ -150,7 +151,7 @@ export default function AdminDashboard({ user, onLogout, onUpdateUser }: AdminDa
       setSlotTimes(slots);
       setSportCapacities(capacities);
       setLocationSports(sports);
-      if (sports.length > 0 && !sports.includes(addFacilitySport)) {
+      if (sports.length > 0 && !sports.some(s => s.toLowerCase() === addFacilitySport.toLowerCase())) {
         setAddFacilitySport(sports[0]);
       }
     } catch (e) {
@@ -257,7 +258,7 @@ export default function AdminDashboard({ user, onLogout, onUpdateUser }: AdminDa
     setSlotsError('');
     setSlotsSuccess('');
     
-    const formattedInput = newSlotInput.trim().toUpperCase();
+    const formattedInput = normalizeSlotLabel(newSlotInput);
     if (!formattedInput) {
       setSlotsError('Slot timing string is required.');
       return;
@@ -269,7 +270,7 @@ export default function AdminDashboard({ user, onLogout, onUpdateUser }: AdminDa
       return;
     }
     
-    if (slotTimes.includes(formattedInput as SlotTime)) {
+    if (slotTimes.some(s => normalizeSlotLabel(s) === formattedInput)) {
       setSlotsError('This slot timing already exists.');
       return;
     }
@@ -292,7 +293,10 @@ export default function AdminDashboard({ user, onLogout, onUpdateUser }: AdminDa
     if (!confirm) return;
     
     try {
-      const bookingsInSlot = bookings.filter(b => b.slotTime === slotToDelete && b.status !== 'cancelled');
+      const slotKey = normalizeSlotLabel(slotToDelete);
+      const bookingsInSlot = bookings.filter(
+        b => normalizeSlotLabel(b.slotTime) === slotKey && b.status !== 'cancelled'
+      );
       if (bookingsInSlot.length > 0) {
         const warnConfirm = window.confirm(
           `Warning: ${bookingsInSlot.length} active booking(s) use "${slotToDelete}" at this location. Proceed?`
@@ -300,7 +304,7 @@ export default function AdminDashboard({ user, onLogout, onUpdateUser }: AdminDa
         if (!warnConfirm) return;
       }
       
-      const updatedSlots = slotTimes.filter(slot => slot !== slotToDelete);
+      const updatedSlots = slotTimes.filter(slot => normalizeSlotLabel(slot) !== slotKey);
       await db.saveSlotTimes(updatedSlots, adminLocation);
       alert('Slot deleted for this location.');
       refreshData();
